@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jet"
+dynamic = ["version"]
+description = "JUST Emulator Toolkit: emulator pipeline for the JUST spectroscopic survey"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov"]
+
+[project.urls]
+Repository = "https://github.com/czymh/jet"
+
+[tool.setuptools]
+# Standard flat layout: package lives at the repository root.
+packages = ["jet"]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+filterwarnings = ["ignore::DeprecationWarning::"]
+
+[tool.coverage.run]
+source = ["jet"]
+omit = ["jet/__init__.py"]

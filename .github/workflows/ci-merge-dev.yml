@@ -1,0 +1,23 @@
+name: Update dev version
+description: |
+  Bumps the dev version (X.Y.Z-dev.N -> X.Y.Z-dev.(N+1), no tag) whenever a pull
+  request is merged into the dev branch and modifies the package code.
+
+on:
+  pull_request:
+    branches: [ "dev" ]
+    types: [ closed ]
+    paths:
+      - "jet/**"
+
+jobs:
+  bump-dev:
+    if: ${{ github.event.pull_request.merged == true }}
+    secrets: inherit
+    uses: ./.github/workflows/bump-version.yml
+    permissions:
+      pull-requests: read
+      contents: write
+    with:
+      bump_type: dev
+      add-tag: false
