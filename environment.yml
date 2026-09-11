@@ -1,0 +1,37 @@
+# Shared development environment for jet.
+#
+# conda manages the interpreter and the packages that are cheapest to get from
+# a binary channel; jet itself is always installed with pip on top of it:
+#
+#     module load anaconda/anaconda-mamba
+#     mamba env create -f environment.yml
+#     conda activate jet
+#     pip install -e ".[test,gp,inf,io]"
+#
+# PyTorch is deliberately installed through pip rather than conda: the conda
+# builds are CPU-only, while the PyPI wheel bundles the CUDA runtime, which is
+# what is wanted on the compute nodes.
+#
+# torchvision and torchaudio are NOT listed. They pull in Pillow, whose recent
+# wheels require glibc 2.28, and this cluster runs RHEL 7 (glibc 2.17). pip then
+# falls back to building Pillow from source and fails on the missing libjpeg
+# headers, taking the whole install down with it. jet does not use either
+# package. Add them deliberately, with a Pillow pin, if something else needs them.
+name: jet
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - scikit-learn
+  - h5py
+  - emcee
+  - pytest
+  - pytest-cov
+  - ruff
+  - pip
+  - pip:
+      - torch

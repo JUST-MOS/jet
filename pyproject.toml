@@ -9,17 +9,41 @@ description = "JUST Emulator Toolkit: emulator pipeline for the JUST spectroscop
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
-dependencies = []
+# Core stays dependency-light on purpose: loading a trained model and producing
+# predictions must work with NumPy alone. Everything needed to *train*, or to
+# run a stage other than the emulator, lives in an extra below.
+dependencies = [
+    "numpy",
+    "scipy",
+]
 
 [project.optional-dependencies]
+# Training a Gaussian-process emulator.
+gp = ["scikit-learn"]
+# Training a neural-network emulator (also the backend for GPU training).
+nn = ["torch"]
+# MCMC / nested-sampling backends for jet.inference.
+inf = ["emcee"]
+# HDF5 and other on-disk catalogs for jet.catalog / jet.estimator.
+io = ["h5py"]
+# Everything, for development and for running the full pipeline.
+all = ["jet[gp,nn,inf,io]"]
 test = ["pytest", "pytest-cov"]
 
 [project.urls]
 Repository = "https://github.com/czymh/jet"
 
 [tool.setuptools]
-# Standard flat layout: package lives at the repository root.
-packages = ["jet"]
+# Standard flat layout: package lives at the repository root. Subpackages must
+# be listed explicitly because discovery is switched off by giving `packages`.
+packages = [
+    "jet",
+    "jet.emulator",
+    "jet.emulator.backends",
+    "jet.catalog",
+    "jet.estimator",
+    "jet.inference",
+]
 
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }
@@ -27,7 +51,21 @@ version = { file = "VERSION" }
 [tool.pytest.ini_options]
 pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning::"]
+# Keep the default run fast and CPU-only; anything needing a GPU or a real
+# simulation belongs in a script under examples/, not in the test suite.
+testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["jet"]
 omit = ["jet/__init__.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately reach into private helpers to pin down behaviour.
+"tests/*" = ["SLF001"]
