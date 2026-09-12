@@ -108,7 +108,7 @@ class TestWeightsPathResolution(unittest.TestCase):
             self.assertEqual(resolve_weights_path("model"), self.root / "model.npz")
 
     def test_missing_file_lists_candidates_and_hints(self) -> None:
-        with patch.dict(os.environ, {"JET_DATA_DIR": str(self.root)}):
+        with patch.dict(os.environ, {"JET_DATA_DIR": str(self.root), "JET_NO_AUTO_FETCH": "1"}):
             with self.assertRaises(FileNotFoundError) as caught:
                 resolve_weights_path("missing")
         message = str(caught.exception)
@@ -116,10 +116,80 @@ class TestWeightsPathResolution(unittest.TestCase):
         self.assertIn("JET_DATA_DIR", message)
 
     def test_missing_file_without_environment_says_so(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {"JET_NO_AUTO_FETCH": "1"}, clear=True):
             with self.assertRaises(FileNotFoundError) as caught:
                 resolve_weights_path("missing")
         self.assertIn("Set JET_DATA_DIR", str(caught.exception))
+
+
+class TestReleaseAutoFetch(unittest.TestCase):
+    """Automatic download of missing weights from GitHub Release."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_fetches_a_missing_bare_name(self) -> None:
+        def _fake_fetch(name: str, dest_dir: Path) -> Path:
+            target = Path(dest_dir) / name
+            target.write_bytes(b"downloaded")
+            return target
+
+        with (
+            patch.dict(os.environ, {"JET_DATA_DIR": str(self.root)}),
+            patch("jet.emulator.emulator._fetch_release_weights", side_effect=_fake_fetch) as fetch,
+        ):
+            resolved = resolve_weights_path("model.npz")
+        self.assertEqual(resolved, self.root / "model.npz")
+        self.assertEqual((self.root / "model.npz").read_bytes(), b"downloaded")
+        fetch.assert_called_once_with("model.npz", self.root)
+
+    def test_fetch_respects_the_suffix(self) -> None:
+        def _fake_fetch(name: str, dest_dir: Path) -> Path:
+            target = Path(dest_dir) / name
+            target.write_bytes(b"x")
+            return target
+
+        with (
+            patch.dict(os.environ, {"JET_DATA_DIR": str(self.root)}),
+            patch("jet.emulator.emulator._fetch_release_weights", side_effect=_fake_fetch) as fetch,
+        ):
+            resolved = resolve_weights_path("model")
+        self.assertEqual(resolved, self.root / "model.npz")
+        fetch.assert_called_once_with("model.npz", self.root)
+
+    def test_fetch_failure_falls_back_to_file_not_found(self) -> None:
+        with (
+            patch.dict(os.environ, {"JET_DATA_DIR": str(self.root)}),
+            patch("jet.emulator.emulator._fetch_release_weights", side_effect=RuntimeError("boom")),
+        ):
+            with self.assertRaises(FileNotFoundError) as caught:
+                resolve_weights_path("missing")
+        message = str(caught.exception)
+        self.assertIn("Automatic download", message)
+        self.assertIn("boom", message)
+
+    def test_disabled_fetch_does_not_touch_the_network(self) -> None:
+        with (
+            patch.dict(os.environ, {"JET_DATA_DIR": str(self.root), "JET_NO_AUTO_FETCH": "1"}),
+            patch("jet.emulator.emulator._fetch_release_weights") as fetch,
+        ):
+            with self.assertRaises(FileNotFoundError):
+                resolve_weights_path("missing")
+        fetch.assert_not_called()
+
+    def test_an_absolute_path_never_fetches(self) -> None:
+        missing = self.root / "definitely-not-here.npz"
+        with (
+            patch.dict(os.environ, {"JET_DATA_DIR": str(self.root)}),
+            patch("jet.emulator.emulator._fetch_release_weights") as fetch,
+        ):
+            with self.assertRaises(FileNotFoundError):
+                resolve_weights_path(str(missing))
+        fetch.assert_not_called()
 
 
 class TestEmulatorConstruction(unittest.TestCase):
