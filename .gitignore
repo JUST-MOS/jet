@@ -1,0 +1,28 @@
+.claude/*
+.vscode/*
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local weight files. Trained emulators are tens of megabytes and are resolved
+# at runtime through $JET_DATA_DIR rather than committed; see AGENTS.md.
+*.npz
+weights/
+
+# Data files bundled with the package. They are reproduced by a script in
+# tools/, are a few megabytes, and are not jet's to redistribute; only the
+# directory's README is tracked. See jet/data/README.md.
+jet/data/*
+!jet/data/README.md
+
+
