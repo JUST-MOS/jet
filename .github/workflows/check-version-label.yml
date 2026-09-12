@@ -10,6 +10,9 @@ on:
     branches: [ "main" ]
     types: [ opened, edited, labeled, unlabeled, synchronize ]
 
+permissions:
+  pull-requests: read
+
 jobs:
   require-version-bump-label:
     runs-on: ubuntu-latest
