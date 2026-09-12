@@ -187,7 +187,12 @@ def build(source: Path, destination: Path, verbose: bool = True) -> Path:
     noise = np.empty(n_components, dtype=float)
     for column in range(n_components):
         factor, used = _factorise(
-            x_train, constant_value[column], length_scale[column], ALPHA, warn=None
+            x_train,
+            constant_value[column],
+            length_scale[column],
+            ALPHA,
+            "rbf",  # the power-spectrum emulator's kernel, unlike the HMF's Matern
+            warn=None,
         )
         noise[column] = used
         alpha_coef[column] = cho_solve((factor, True), scaled_coefficients[:, column])

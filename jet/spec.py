@@ -440,9 +440,10 @@ class ParameterSpec:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable description of this spec.
 
-        Derived declarations are included, so a change of conversion changes the
-        spec hash and a bundle trained under one frame is not silently reused
-        under another.
+        Carries the derived declarations as well as the axes, so that a model
+        loaded from a bundle can still say which conversions its spec offers.
+        Those declarations are deliberately *not* what :meth:`hash` covers; see
+        there.
         """
         return {
             "params": [p.to_dict() for p in self.params],
@@ -456,8 +457,21 @@ class ParameterSpec:
         return cls((Param.from_dict(p) for p in data["params"]), derived=derived)
 
     def hash(self) -> str:
-        """Return a short content hash, used to bind a model to its spec."""
-        return _canonical_hash(self.to_dict())
+        """Return a short content hash of the axes, used to bind a model to its spec.
+
+        Derived declarations carry no weight here even though :meth:`to_dict`
+        stores them. A model reads the axes of its spec and nothing else -- a
+        conversion is applied by the caller, before the model sees the array --
+        so two specs differing only in which conversions they declare present
+        the same input space, and a bundle is bound to the axes alone.
+
+        The practical consequence is that declaring a derived parameter leaves
+        existing bundles valid, which is what makes doing so cheap. ``__eq__``
+        still compares the whole content, so two specs can be unequal and hash
+        alike; that direction of the relationship is an ordinary collision, not
+        a contradiction of the equality invariant.
+        """
+        return _canonical_hash({"params": [p.to_dict() for p in self.params]})
 
     # ------------------------------------------------------------------
     # Internals
@@ -523,15 +537,15 @@ class DerivedFrame:
     --------
     >>> from jet.derived import LinearCombination
     >>> spec = ParameterSpec(
-    ...     [Param("Omegab", bounds=(0.04, 0.06)), Param("Omegac", bounds=(0.2, 0.34))],
-    ...     derived=[LinearCombination("Omegam", "Omegac", {"Omegab": 1.0, "Omegac": 1.0})],
+    ...     [Param("Omegab", bounds=(0.04, 0.06)), Param("H0", bounds=(60.0, 80.0))],
+    ...     derived=[LinearCombination("h", "H0", {"H0": 0.01})],
     ... )
-    >>> frame = spec.frame("Omegam")
+    >>> frame = spec.frame("h")
     >>> frame.names
-    ('Omegab', 'Omegam')
+    ('Omegab', 'h')
     >>> import numpy as np
-    >>> frame.to_base(np.array([[0.049, 0.31]]))
-    array([[0.049, 0.261]])
+    >>> frame.to_base(np.array([[0.049, 0.7]]))
+    array([[4.9e-02, 7.0e+01]])
     """
 
     def __init__(self, spec: ParameterSpec, name: str) -> None:

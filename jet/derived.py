@@ -4,10 +4,9 @@ Derived parameters: axes that are re-expressions of other axes.
 A :class:`~jet.spec.ParameterSpec` describes the axes an emulator is trained on.
 Sometimes the same physical model is more usefully addressed along a different
 axis: an emulator trained on the primordial amplitude :math:`A_s` is more
-conveniently *driven* by :math:`\\sigma_8`, and one trained on
-:math:`\\Omega_c` is more conveniently driven by :math:`\\Omega_m`. Neither is a
-new degree of freedom -- each is an invertible function of the others, so the
-two parameterisations describe the same model.
+conveniently *driven* by :math:`\\sigma_8`. That is not a new degree of freedom
+-- the two are invertible functions of each other, so both parameterisations
+describe the same model.
 
 This module holds the machinery for that substitution. A :class:`Conversion`
 names one derived parameter and the axis it stands in for, and can move values
@@ -228,7 +227,7 @@ class LinearCombination(Conversion):
     """A derived parameter that is a linear combination of other axes.
 
     Covers the affine bookkeeping relations that show up in a cosmological
-    parameter space, of which ``Omegam = Omegab + Omegac`` is the common one.
+    parameter space, such as :math:`h = H_0 / 100`.
 
     Parameters
     ----------
@@ -242,13 +241,13 @@ class LinearCombination(Conversion):
     Examples
     --------
     >>> import numpy as np
-    >>> conv = LinearCombination("Omegam", "Omegac", {"Omegab": 1.0, "Omegac": 1.0})
-    >>> cols = {"Omegab": 0, "Omegac": 1}
-    >>> X = np.array([[0.049, 0.260]])
+    >>> conv = LinearCombination("h", "H0", {"H0": 0.01})
+    >>> cols = {"H0": 0}
+    >>> X = np.array([[67.66]])
     >>> conv.to_derived(X, cols)
-    array([0.309])
-    >>> conv.to_base(X, np.array([0.31]), cols)
-    array([[0.049, 0.261]])
+    array([0.6766])
+    >>> conv.to_base(X, np.array([0.7]), cols)
+    array([[70.]])
     """
 
     kind = "linear"
@@ -321,9 +320,6 @@ class Sigma8FromAs(Conversion):
         :func:`jet.emulator.resolve_weights_path`. A live :class:`Emulator`
         works for in-memory use but cannot be written to a bundle -- save it
         and pass the path instead.
-    omegab, omegac : str, optional
-        Names of the baryon and cold-dark-matter axes. The bundled emulator is
-        trained on :math:`\\Omega_m`, which is summed here.
     R : float, optional
         Smoothing scale in :math:`\\mathrm{Mpc}/h`.
     z : float, optional
@@ -355,8 +351,6 @@ class Sigma8FromAs(Conversion):
         name: str = "sigma8",
         base: str = "As",
         pklin: Emulator | str | None = None,
-        omegab: str = "Omegab",
-        omegac: str = "Omegac",
         R: float = 8.0,
         z: float = 0.0,
         tolerance: float = 1e-8,
@@ -366,7 +360,9 @@ class Sigma8FromAs(Conversion):
         super().__init__(
             name,
             base,
-            requires=(omegab, omegac, "H0", "ns", "w0", "wa", "mnu"),
+            # PKLIN_PARAMETERS minus the amplitude, which the inversion solves
+            # for rather than reads.
+            requires=("Omegab", "Omegam", "H0", "ns", "w0", "wa", "mnu"),
         )
         if R <= 0.0:
             raise ValueError(f"R must be positive, got {R}")
@@ -379,8 +375,6 @@ class Sigma8FromAs(Conversion):
         if max_iterations < 1:
             raise ValueError(f"max_iterations must be at least 1, got {max_iterations}")
 
-        self.omegab = omegab
-        self.omegac = omegac
         self.R = float(R)
         self.z = float(z)
         self.tolerance = float(tolerance)
@@ -411,10 +405,9 @@ class Sigma8FromAs(Conversion):
     def _theta(self, X: np.ndarray, columns: Columns, As: np.ndarray) -> np.ndarray:
         """Assemble a ``(n_samples, 8)`` block in the P(k) emulator's own order."""
         X = np.asarray(X, dtype=float)
-        Omegam = X[:, columns[self.omegab]] + X[:, columns[self.omegac]]
         values = {
-            "Omegab": X[:, columns[self.omegab]],
-            "Omegam": Omegam,
+            "Omegab": X[:, columns["Omegab"]],
+            "Omegam": X[:, columns["Omegam"]],
             "H0": X[:, columns["H0"]],
             "ns": X[:, columns["ns"]],
             "As": As,
@@ -496,8 +489,6 @@ class Sigma8FromAs(Conversion):
             )
         return {
             "pklin": pklin,
-            "omegab": self.omegab,
-            "omegac": self.omegac,
             "R": self.R,
             "z": self.z,
             "tolerance": self.tolerance,
@@ -513,8 +504,6 @@ class Sigma8FromAs(Conversion):
             name=state["name"],
             base=state["base"],
             pklin=None if pklin == "builtin" else pklin,
-            omegab=settings["omegab"],
-            omegac=settings["omegac"],
             R=settings["R"],
             z=settings["z"],
             tolerance=settings["tolerance"],
