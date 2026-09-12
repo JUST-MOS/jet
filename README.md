@@ -65,11 +65,13 @@ import numpy as np
 from jet.spec import ParameterSpec, Param, DataVectorSpec
 from jet.emulator import Emulator
 
-x_spec = ParameterSpec([
-    Param("Omegab", bounds=(0.04, 0.06), block="cosmo"),
-    Param("ns", bounds=(0.92, 1.00), block="cosmo"),
-    Param("logMcut", bounds=(12.0, 13.8), block="hod"),
-])
+x_spec = ParameterSpec(
+    [
+        Param("Omegab", bounds=(0.04, 0.06), block="cosmo"),
+        Param("ns", bounds=(0.92, 1.00), block="cosmo"),
+        Param("logMcut", bounds=(12.0, 13.8), block="hod"),
+    ]
+)
 y_spec = DataVectorSpec("wp", n_bins=15, log=True)
 
 # X: (N, 3) raw parameters, y: (N, 15) raw statistics. Arbitrary points, not a grid.
@@ -85,8 +87,8 @@ Loading needs neither scikit-learn nor PyTorch:
 ```python
 from jet.emulator import Emulator
 
-emulator = Emulator.load("wp.gp.npz")   # resolved against $JET_DATA_DIR
-emulator.verify(x_spec=x_spec)          # optional, catches a column reordering
+emulator = Emulator.load("wp.gp.npz")  # resolved against $JET_DATA_DIR
+emulator.verify(x_spec=x_spec)  # optional, catches a column reordering
 ```
 
 ## Derived parameters
@@ -99,17 +101,24 @@ spec be *addressed* along either parameter, converting at the boundary:
 from jet.derived import Sigma8FromAs
 
 x_spec = ParameterSpec(
-    [Param("Omegab", ...), Param("Omegam", ...), Param("H0", ...), Param("ns", ...),
-     Param("As", bounds=(1.7e-9, 2.5e-9)), Param("w0", ...), Param("wa", ...),
-     Param("mnu", ...)],
-    derived=[Sigma8FromAs()],                    # sigma8 <-> As
+    [
+        Param("Omegab", ...),
+        Param("Omegam", ...),
+        Param("H0", ...),
+        Param("ns", ...),
+        Param("As", bounds=(1.7e-9, 2.5e-9)),
+        Param("w0", ...),
+        Param("wa", ...),
+        Param("mnu", ...),
+    ],
+    derived=[Sigma8FromAs()],  # sigma8 <-> As
 )
 
-emulator = Emulator(x_spec, y_spec).fit(X, y)    # trained on As, as the table has it
-emulator.predict(X_new)                          # X_new is in As
+emulator = Emulator(x_spec, y_spec).fit(X, y)  # trained on As, as the table has it
+emulator.predict(X_new)  # X_new is in As
 
 frame = emulator.x_spec.frame("sigma8")
-emulator.predict(frame.to_base(X_sigma8))        # driven by sigma8 instead
+emulator.predict(frame.to_base(X_sigma8))  # driven by sigma8 instead
 ```
 
 `X` keeps its `(n_samples, x_spec.dim)` shape in either frame, and the two
@@ -180,9 +189,22 @@ bare name, in which case it is looked up under `$JET_DATA_DIR`:
 export JET_DATA_DIR=/share/users/<you>/jet-weights
 ```
 
-A bundle is a single `.npz` holding the two specs, the fitted transform chains
-and the backend state, all as plain arrays — no pickled estimators, so a model
-does not break when scikit-learn is upgraded.
+### Fetching from GitHub Release
+
+Since v0.1.0 the weights are also attached to the GitHub Release of each
+version, so a plain `pip install` needs no environment configuration: the first
+`Emulator.load("<name>.npz")` fetches the file from the release into the user
+cache (`$XDG_CACHE_HOME/jet/data`, defaulting to `~/.cache/jet/data`), and
+every later call reads the cache. The fetch lives in
+`jet.emulator.resolve_weights_path`; disable it with `JET_NO_AUTO_FETCH`, pin a
+release with `JET_RELEASE_TAG`, and point a private repository's token via
+`GITHUB_TOKEN` / `JET_DATA_TOKEN`.
+
+Publish the current weights with:
+
+```bash
+python tools/publish_data.py          # uploads jet/data/*.npz to the VERSION tag
+```
 
 ## Repository layout
 

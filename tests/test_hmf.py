@@ -204,6 +204,7 @@ class TestCosmology(unittest.TestCase):
         self.assertEqual(spec[spec.index("mnu")].bounds, (0.0, 0.3))
 
 
+@unittest.skipUnless(HAS_DATA, f"{BUNDLE_NAME} is not present")
 class TestCastro23Baseline(unittest.TestCase):
     """The analytic baseline, which needs no bundled weights."""
 

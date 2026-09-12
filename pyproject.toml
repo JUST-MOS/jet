@@ -8,7 +8,9 @@ dynamic = ["version"]
 description = "JUST Emulator Toolkit: emulator pipeline for the JUST spectroscopic survey"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "BSD-3-Clause" }
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+
 # Core stays dependency-light on purpose: loading a trained model and producing
 # predictions must work with NumPy alone. Everything needed to *train*, or to
 # run a stage other than the emulator, lives in an extra below.
@@ -69,3 +71,5 @@ select = ["E", "F", "W", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 # Tests deliberately reach into private helpers to pin down behaviour.
 "tests/*" = ["SLF001"]
+"examples/*" = ["E501", "B905"]
+

@@ -29,7 +29,11 @@ Example
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import urllib.parse
+import urllib.request
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -57,29 +61,153 @@ __all__ = ["Emulator", "resolve_weights_path", "data_dir"]
 #: than by path. Point it at the shared location holding the ``.npz`` files.
 DATA_DIR_ENV = "JET_DATA_DIR"
 
+#: Any non-empty value disables the automatic fetch from GitHub Release.
+NO_AUTO_FETCH_ENV = "JET_NO_AUTO_FETCH"
+
+#: Repository whose release assets hold the bundled weights. Override for a
+#: fork or mirror with ``JET_RELEASE_REPO``.
+RELEASE_REPO_ENV = "JET_RELEASE_REPO"
+DEFAULT_RELEASE_REPO = "czymh/jet"
+
+#: Pin a specific release tag instead of the latest one.
+RELEASE_TAG_ENV = "JET_RELEASE_TAG"
+
+#: Environment variables consulted for a GitHub token (private repositories).
+_TOKEN_ENVS = ("GITHUB_TOKEN", "JET_DATA_TOKEN")
+
+#: HTTP timeout for the GitHub API lookups and asset downloads.
+_HTTP_TIMEOUT = 10.0
+
 #: Accepted values of the ``x_normalize`` argument.
 _X_NORMALIZE_MODES = ("standardize", "bounds", "bounds+standardize", "none")
+
+
+def cache_data_dir() -> Path:
+    """Return the per-user cache directory weights are fetched into.
+
+    Follows the XDG convention: ``$XDG_CACHE_HOME/jet/data``, falling back to
+    ``~/.cache/jet/data``. This is where the automatic GitHub Release fetch
+    lands, so a plain ``pip install`` needs no environment configuration.
+
+    Returns
+    -------
+    pathlib.Path
+        The cache directory. Not guaranteed to exist; callers create it.
+    """
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base).expanduser() if base else Path.home() / ".cache"
+    return root / "jet" / "data"
 
 
 def data_dir() -> Path:
     """Return the directory holding jet's own bundled data files.
 
-    Resolved as :data:`DATA_DIR_ENV` when that is set, and as the package's
-    ``data`` directory otherwise. The environment override exists so that a
-    shared installation can be pointed at a copy living on a cluster
-    filesystem without moving the package.
+    Resolution order:
+
+    1. :data:`DATA_DIR_ENV` when set -- a shared cluster copy, say;
+    2. the package's own ``data`` directory when it already holds files --
+       a checkout or wheel that ships weights;
+    3. :func:`cache_data_dir`, where weights fetched from GitHub Release land
+       on first use.
+
+    The environment override exists so that a shared installation can be
+    pointed at a copy living on a cluster filesystem without moving the
+    package; the cache fallback exists so that an unconfigured installation
+    still resolves -- and fetches -- sensibly.
 
     Returns
     -------
     pathlib.Path
         Directory that bundled data files live in. Not guaranteed to exist:
-        the files themselves are not tracked by git, so a fresh clone has an
-        empty directory and the readers raise when they look inside.
+        the files themselves are not tracked by git, and the readers raise
+        with instructions when they look inside an empty one.
     """
     override = os.environ.get(DATA_DIR_ENV)
     if override:
         return Path(override).expanduser()
-    return Path(__file__).resolve().parent.parent / "data"
+    pkg_data = Path(__file__).resolve().parent.parent / "data"
+    if pkg_data.is_dir() and any(pkg_data.iterdir()):
+        return pkg_data
+    return cache_data_dir()
+
+
+def _github_headers(token: str | None, *, octet: bool = False) -> dict[str, str]:
+    """Headers for a GitHub API call, with optional token and media type."""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "jet"}
+    if octet:
+        headers["Accept"] = "application/octet-stream"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _release_tag() -> str:
+    """Resolve the release tag the weights should come from.
+
+    ``JET_RELEASE_TAG`` pins one; otherwise the latest release of the
+    repository is used.
+    """
+    pinned = os.environ.get(RELEASE_TAG_ENV)
+    if pinned:
+        return pinned
+    repo = os.environ.get(RELEASE_REPO_ENV, DEFAULT_RELEASE_REPO)
+    token = next((os.environ.get(k) for k in _TOKEN_ENVS if os.environ.get(k)), None)
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    with urllib.request.urlopen(
+        urllib.request.Request(url, headers=_github_headers(token)), timeout=_HTTP_TIMEOUT
+    ) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return str(payload["tag_name"])
+
+
+def _download_release_asset(name: str, dest: Path) -> Path:
+    """Download ``name`` from the project's release assets into ``dest``.
+
+    Uses the GitHub API throughout (public or token-authenticated), streams to
+    a temporary sibling, and moves the file into place so an interrupted
+    download cannot leave a half-written bundle behind -- the same discipline
+    :func:`jet.emulator.bundle.save_bundle` applies on write.
+    """
+    repo = os.environ.get(RELEASE_REPO_ENV, DEFAULT_RELEASE_REPO)
+    token = next((os.environ.get(k) for k in _TOKEN_ENVS if os.environ.get(k)), None)
+    tag = _release_tag()
+
+    assets_url = (
+        f"https://api.github.com/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}"
+    )
+    with urllib.request.urlopen(
+        urllib.request.Request(assets_url, headers=_github_headers(token)), timeout=_HTTP_TIMEOUT
+    ) as response:
+        release = json.loads(response.read().decode("utf-8"))
+
+    matches = [a for a in release.get("assets", []) if a.get("name") == name]
+    if not matches:
+        available = sorted(a.get("name", "") for a in release.get("assets", []))
+        raise FileNotFoundError(
+            f"release {tag!r} of {repo} has no asset named {name!r}; "
+            f"available: {available or 'none'}"
+        )
+
+    asset_url = f"https://api.github.com/repos/{repo}/releases/assets/{matches[0]['id']}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    request = urllib.request.Request(asset_url, headers=_github_headers(token, octet=True))
+    try:
+        with (
+            urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response,
+            open(tmp, "wb") as handle,
+        ):
+            shutil.copyfileobj(response, handle)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return dest
+
+
+def _fetch_release_weights(name: str, dest_dir: Path) -> Path:
+    """Fetch one weight file from GitHub Release into ``dest_dir``."""
+    return _download_release_asset(name, Path(dest_dir) / name)
 
 
 def resolve_weights_path(spec: str | os.PathLike[str], suffix: str = ".npz") -> Path:
@@ -88,16 +216,24 @@ def resolve_weights_path(spec: str | os.PathLike[str], suffix: str = ".npz") -> 
     Resolution order:
 
     1. the argument itself, if it is an existing file;
-    2. ``$JET_DATA_DIR/<argument>``, and then the same with ``suffix`` appended.
+    2. under the data directory (``$JET_DATA_DIR``, the package ``data``
+       directory, or the user cache -- whichever :func:`data_dir` resolves
+       to), appending ``suffix`` when the name has none;
+    3. when the argument is a bare name (no directory component), the file is
+       fetched from the project's GitHub Release and the lookup is retried.
 
-    A name that resolves nowhere raises immediately and lists the directories
-    that were tried, because the failure mode this guards against -- silently
-    loading a stale copy from a relative path -- is otherwise very hard to spot.
+    The automatic fetch exists so that a plain ``pip install`` needs no
+    environment configuration: the first ``Emulator.load("wp.gp.npz")`` pulls
+    the weights into the user cache and every later call hits the cache. It
+    can be disabled with :data:`NO_AUTO_FETCH_ENV`. A name that resolves
+    nowhere raises and lists the directories that were tried, because the
+    failure mode this guards against -- silently loading a stale copy from a
+    relative path -- is otherwise very hard to spot.
 
     Parameters
     ----------
     spec : str or path-like
-        A filesystem path, or a bare filename relative to ``$JET_DATA_DIR``.
+        A filesystem path, or a bare filename relative to the data directory.
     suffix : str, optional
         Default suffix appended when the name has none.
 
@@ -109,24 +245,35 @@ def resolve_weights_path(spec: str | os.PathLike[str], suffix: str = ".npz") -> 
     Raises
     ------
     FileNotFoundError
-        If no candidate exists.
+        If no candidate exists (and the fetch, when attempted, failed).
     """
     given = Path(spec).expanduser()
 
     if given.exists():
         return given
 
-    candidates: list[Path] = []
     root = os.environ.get(DATA_DIR_ENV)
-    if root:
-        base = Path(root).expanduser()
-        candidates.append(base / given)
-        if given.suffix == "":
-            candidates.append(base / f"{given}{suffix}")
+    base = Path(root).expanduser() if root else data_dir()
+    candidates: list[Path] = [base / given]
+    if given.suffix == "":
+        candidates.append(base / f"{given}{suffix}")
 
     for candidate in candidates:
         if candidate.exists():
             return candidate
+
+    download_note = ""
+    if given.parent == Path(".") and not os.environ.get(NO_AUTO_FETCH_ENV):
+        name = given.name if given.suffix else f"{given.name}{suffix}"
+        try:
+            _fetch_release_weights(name, candidates[0].parent)
+        except Exception as exc:  # any failure falls back to the standard error
+            download_note = f" Automatic download from GitHub Release failed: {exc}"
+        else:
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            download_note = f" Automatic download wrote nothing to {candidates[0].parent}."
 
     tried = [str(p) for p in [given, *candidates]]
     hint = (
@@ -134,7 +281,7 @@ def resolve_weights_path(spec: str | os.PathLike[str], suffix: str = ".npz") -> 
         if root is None
         else f"{DATA_DIR_ENV}={root!r}"
     )
-    raise FileNotFoundError(f"no weight file found; tried {tried}. {hint}")
+    raise FileNotFoundError(f"no weight file found; tried {tried}. {hint}{download_note}")
 
 
 class Emulator:
