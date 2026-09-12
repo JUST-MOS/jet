@@ -33,7 +33,7 @@ import numpy as np
 
 from ..cosmology import cosmo_parameter_spec
 from ..spec import DataVectorSpec, ParameterSpec
-from .emulator import Emulator, data_dir
+from .emulator import Emulator, data_dir, resolve_weights_path
 
 __all__ = [
     "BUNDLE_NAME",
@@ -85,15 +85,15 @@ _SPLINE_BBOX = [0.0, 3.0, -6.0, 6.0]
 
 
 def _data_path(name: str) -> Path:
-    """Resolve one bundled data file, with a message that says what to do."""
-    path = data_dir() / name
-    if not path.exists():
+    """Resolve one bundled data file, auto-fetching from GitHub Release if needed."""
+    try:
+        return resolve_weights_path(name)
+    except FileNotFoundError as exc:
         raise FileNotFoundError(
             f"the bundled data file {name!r} is missing from {data_dir()}. It is not "
             "tracked by git; regenerate it with tools/build_pklin_bundle.py, or set "
             "JET_DATA_DIR to a directory that already holds it."
-        )
-    return path
+        ) from exc
 
 
 @lru_cache(maxsize=1)
