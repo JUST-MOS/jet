@@ -71,3 +71,5 @@ select = ["E", "F", "W", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 # Tests deliberately reach into private helpers to pin down behaviour.
 "tests/*" = ["SLF001"]
+"examples/*" = ["E501", "B905"]
+

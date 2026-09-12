@@ -33,7 +33,9 @@ standard-layout (flat) Python package with ACM-style version management
 ## Coding style
 
 - numpy-style docstrings (module, function, `Returns`); follow the lint config in `pyproject.toml` before pushing.
-- No large data files in the repo; point to external data paths in code.
+- No large data files in the repo. Weights are distributed via GitHub Release and
+  auto-fetched on first use (`resolve_weights_path`, disabled by `JET_NO_AUTO_FETCH`);
+  run `tools/publish_data.py` after retraining.
 
 ## README
 
