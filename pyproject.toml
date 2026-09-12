@@ -8,7 +8,9 @@ dynamic = ["version"]
 description = "JUST Emulator Toolkit: emulator pipeline for the JUST spectroscopic survey"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "BSD-3-Clause" }
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+
 # Core stays dependency-light on purpose: loading a trained model and producing
 # predictions must work with NumPy alone. Everything needed to *train*, or to
 # run a stage other than the emulator, lives in an extra below.
