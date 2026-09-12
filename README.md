@@ -224,6 +224,12 @@ conda activate jet
 pip install -e ".[test,gp]"
 ```
 
+If you are the user of Gravity cluster, you can use 
+```bash
+source gravity-user.sh
+```
+to load my conda env and setup the path of trained data file for a quick usage.
+
 ## Version management
 
 `jet` follows semantic versioning with an ACM-style automation:
