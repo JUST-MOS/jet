@@ -93,25 +93,23 @@ emulator.verify(x_spec=x_spec)          # optional, catches a column reordering
 
 A parameter that is a function of the others is not a new axis, and `jet` does
 not treat it as one. Declaring it on the spec adds no column — it lets the same
-model be *addressed* along either parameter, converting at the boundary:
+spec be *addressed* along either parameter, converting at the boundary:
 
 ```python
-from jet.derived import Sigma8FromAs, LinearCombination
+from jet.derived import Sigma8FromAs
 
 x_spec = ParameterSpec(
-    [Param("Omegab", ...), Param("Omegac", ...), Param("H0", ...), Param("ns", ...),
+    [Param("Omegab", ...), Param("Omegam", ...), Param("H0", ...), Param("ns", ...),
      Param("As", bounds=(1.7e-9, 2.5e-9)), Param("w0", ...), Param("wa", ...),
      Param("mnu", ...)],
-    derived=[
-        Sigma8FromAs(),                                              # sigma8 <-> As
-        LinearCombination("Omegam", "Omegac",                        # Omegam <-> Omegac
-                          {"Omegab": 1.0, "Omegac": 1.0}),
-    ],
+    derived=[Sigma8FromAs()],                    # sigma8 <-> As
 )
 
-emulator = Emulator(x_spec, y_spec).fit(X, y)   # trained on As, as the table has it
-emulator.predict(X_new)                         # still As
-emulator.predict(X_sigma8, frame="sigma8")      # driven by sigma8 instead
+emulator = Emulator(x_spec, y_spec).fit(X, y)    # trained on As, as the table has it
+emulator.predict(X_new)                          # X_new is in As
+
+frame = emulator.x_spec.frame("sigma8")
+emulator.predict(frame.to_base(X_sigma8))        # driven by sigma8 instead
 ```
 
 `X` keeps its `(n_samples, x_spec.dim)` shape in either frame, and the two
@@ -119,6 +117,13 @@ agree to the accuracy of the conversion. `Sigma8FromAs` evaluates `sigma8`
 through `jet`'s bundled linear-theory `P(k)` emulator and inverts with the same
 fixed point `csstemu` uses; see [Derived parameters](jet/derived.py) and
 [the bundled data](jet/data/README.md).
+
+The conversion is applied by **you**, not by the model: an emulator reads the
+axes of its spec and nothing else. That keeps a parameter array to a single
+reading at the point it is consumed, and it means a bundle is bound to the axes
+alone — declaring or removing a derived parameter never invalidates one. A
+loaded model still carries its declarations, so `emulator.x_spec.derived_names`
+tells you which frames are available.
 
 > [!NOTE]
 > The bundled weights are not part of the distribution. A wheel or a fresh
@@ -185,7 +190,7 @@ does not break when scikit-learn is upgraded.
 jet/
 ├── jet/                    # the Python package (standard flat layout)
 │   ├── spec.py             # ParameterSpec / DataVectorSpec, shared by all stages
-│   ├── derived.py          # derived parameters: sigma8 <- As, Omegam <- Omegac
+│   ├── derived.py          # derived parameters: sigma8 <- As, h <- H0
 │   ├── cosmology.py        # background expansion the ported physics needs
 │   ├── emulator/           # transforms, backends, bundle format, metrics
 │   │   ├── pklin.py        # reader for the bundled linear-theory P(k) emulator
