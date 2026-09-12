@@ -72,10 +72,31 @@ class TestConversionProtocol(unittest.TestCase):
             LinearCombination("Omegam", "Omegac", {"Omegac": 1.0, "Omegam": 2.0})
 
     def test_rejects_duplicate_requires(self) -> None:
-        # A mapping of terms cannot repeat a key, so this is driven through the
-        # constructors that take axis names individually.
+        # Neither public conversion can produce this -- LinearCombination takes
+        # its terms as a mapping, which cannot repeat a key, and Sigma8FromAs
+        # derives its axes from a fixed tuple -- so it is driven from a local
+        # subclass rather than left uncovered.
+        class Duplicated(Conversion):
+            kind = "test-duplicated"
+
+            def __init__(self) -> None:
+                super().__init__("derived", "base", requires=("dup", "dup"))
+
+            def to_derived(self, X, columns):  # pragma: no cover - never called
+                raise NotImplementedError
+
+            def to_base(self, X, values, columns):  # pragma: no cover
+                raise NotImplementedError
+
+            def state(self):  # pragma: no cover
+                return {}
+
+            @classmethod
+            def from_state(cls, state):  # pragma: no cover
+                return cls()
+
         with self.assertRaises(ValueError):
-            Sigma8FromAs(omegab="Omegab", omegac="Omegab")
+            Duplicated()
 
     def test_missing_reports_absent_axes(self) -> None:
         conversion = _omegam_conversion()
@@ -244,16 +265,30 @@ class TestParameterSpecDerived(unittest.TestCase):
         self.assertEqual(rebuilt, spec)
         self.assertEqual(rebuilt.hash(), spec.hash())
 
-    def test_hash_covers_the_conversion(self) -> None:
-        """Two specs with the same axes but different conversions are different."""
+    def test_hash_ignores_the_conversion(self) -> None:
+        """The hash binds a model to the axes, and conversions are the caller's business.
+
+        A model never reads a conversion -- the caller applies it before the
+        array reaches the model -- so declaring one must not invalidate a
+        bundle. The declarations still travel in ``to_dict``, which is what lets
+        a loaded model report the frames its spec offers.
+        """
         plain = _cosmo_spec()
         terms = {"Omegab": 2.0, "Omegac": 1.0}
         doubled = _cosmo_spec([LinearCombination("Omegam", "Omegac", terms)])
-        self.assertNotEqual(plain.hash(), doubled.hash())
+
+        self.assertEqual(plain.hash(), doubled.hash())
+        self.assertNotEqual(plain.to_dict(), doubled.to_dict())
+        self.assertNotEqual(plain, doubled)
 
 
-class TestEmulatorFrames(unittest.TestCase):
-    """An emulator trained on one axis, driven along another."""
+class TestDerivedParametersWithAnEmulator(unittest.TestCase):
+    """An emulator trained on one axis, driven along another by the caller.
+
+    The substitution lives outside the model on purpose: whatever the caller
+    passes to :meth:`predict` means exactly what ``x_spec`` says it means, so
+    there is only ever one reading of an array at the point it is consumed.
+    """
 
     def setUp(self) -> None:
         rng = np.random.default_rng(7)
@@ -267,38 +302,23 @@ class TestEmulatorFrames(unittest.TestCase):
         self.emulator = Emulator(
             self.spec, self.y_spec, backend="gp", backend_kwargs={"optimizer": None}
         ).fit(self.X, self.y)
-        self.frame = self.spec.frame("Omegam")
 
-    def test_predicting_in_a_frame_matches_the_base_frame(self) -> None:
-        derived = self.frame.from_base(self.X[:6])
-        expected = self.emulator.predict(self.X[:6], return_std=False)
-        got = self.emulator.predict(derived, return_std=False, frame="Omegam")
-        np.testing.assert_allclose(got, expected, rtol=1e-10)
-
-    def test_fitting_in_a_frame_matches_fitting_in_the_base_frame(self) -> None:
-        other = Emulator(
-            self.spec, self.y_spec, backend="gp", backend_kwargs={"optimizer": None}
-        ).fit(self.frame.from_base(self.X), self.y, frame="Omegam")
+    def test_converting_before_the_call_reproduces_the_base_frame(self) -> None:
+        frame = self.spec.frame("Omegam")
+        derived = frame.from_base(self.X[:6])
         np.testing.assert_allclose(
-            other.predict(self.X[:6], return_std=False),
+            self.emulator.predict(frame.to_base(derived), return_std=False),
             self.emulator.predict(self.X[:6], return_std=False),
             rtol=1e-10,
         )
 
-    def test_an_unknown_frame_names_the_derived_ones(self) -> None:
-        with self.assertRaises(KeyError) as caught:
-            self.emulator.predict(self.X[:2], frame="sigma8")
-        self.assertIn("Omegam", str(caught.exception))
+    def test_the_declaration_survives_a_bundle_round_trip(self) -> None:
+        """A loaded model still names the frames its spec offers.
 
-    def test_a_frame_on_a_plain_spec_is_rejected(self) -> None:
-        emulator = Emulator(
-            _cosmo_spec(), self.y_spec, backend="gp", backend_kwargs={"optimizer": None}
-        ).fit(self.X, self.y)
-        with self.assertRaises(ValueError) as caught:
-            emulator.predict(self.X[:2], frame="Omegam")
-        self.assertIn("no derived parameters", str(caught.exception))
-
-    def test_the_frame_survives_a_bundle_round_trip(self) -> None:
+        The model cannot act on the declaration, but it carries it, so a caller
+        holding nothing but the bundle can find out that ``Omegam`` is available
+        and convert through it.
+        """
         import tempfile
         from pathlib import Path
 
@@ -307,17 +327,23 @@ class TestEmulatorFrames(unittest.TestCase):
             restored = Emulator.load(path)
 
         self.assertEqual(restored.x_spec.derived_names, ("Omegam",))
-        derived = self.frame.from_base(self.X[:6])
+        frame = restored.x_spec.frame("Omegam")
         np.testing.assert_allclose(
-            restored.predict(derived, return_std=False, frame="Omegam"),
+            restored.predict(frame.to_base(frame.from_base(self.X[:6])), return_std=False),
             self.emulator.predict(self.X[:6], return_std=False),
             rtol=1e-10,
         )
 
-    def test_verify_catches_a_changed_conversion(self) -> None:
-        other = _cosmo_spec([LinearCombination("Omegam", "Omegac", {"Omegab": 2.0, "Omegac": 1.0})])
+    def test_verify_catches_a_changed_axis_but_not_a_changed_declaration(self) -> None:
+        dropped = _cosmo_spec([_omegam_conversion()]).subset(["Omegab", "H0"])
         with self.assertRaises(ValueError):
-            self.emulator.verify(x_spec=other)
+            self.emulator.verify(x_spec=dropped)
+
+        # A different conversion over the same axes is not a mismatch: the model
+        # reads the axes, and the conversions are the caller's to choose.
+        terms = {"Omegab": 2.0, "Omegac": 1.0}
+        doubled = _cosmo_spec([LinearCombination("Omegam", "Omegac", terms)])
+        self.emulator.verify(x_spec=doubled)
 
 
 @unittest.skipUnless(HAS_DATA, f"requires the bundled data under {data_dir()}")
@@ -327,12 +353,12 @@ class TestSigma8FromAs(unittest.TestCase):
     #: Computed by the reference implementation for the cosmology below.
     REFERENCE_SIGMA8 = 0.8139727843066471
 
-    #: Omegab, Omegac, H0, ns, As, w0, wa, mnu.
-    COSMOLOGY = np.array([[0.049, 0.261, 67.66, 0.9665, 2.105e-9, -1.0, 0.0, 0.06]])
+    #: Omegab, Omegam, H0, ns, As, w0, wa, mnu -- the emulator's own axes.
+    COSMOLOGY = np.array([[0.049, 0.310, 67.66, 0.9665, 2.105e-9, -1.0, 0.0, 0.06]])
 
     COLUMNS = {
         "Omegab": 0,
-        "Omegac": 1,
+        "Omegam": 1,
         "H0": 2,
         "ns": 3,
         "As": 4,
@@ -347,7 +373,7 @@ class TestSigma8FromAs(unittest.TestCase):
         cls.spec = ParameterSpec(
             [
                 Param("Omegab", (0.04, 0.06)),
-                Param("Omegac", (0.20, 0.34)),
+                Param("Omegam", (0.24, 0.40)),
                 Param("H0", (60.0, 80.0)),
                 Param("ns", (0.92, 1.00)),
                 Param("As", (1.7e-9, 2.5e-9)),

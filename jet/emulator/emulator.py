@@ -191,12 +191,15 @@ class Emulator:
 
     Notes
     -----
-    When ``x_spec`` declares derived parameters (:mod:`jet.derived`), the model
-    can be driven along whichever of the pair is convenient: pass ``frame`` to
-    :meth:`fit` or :meth:`predict` and the values are substituted back into the
-    frame the model was trained on. The training frame itself is unchanged --
-    a model trained on ``As`` is not retrained to be predicted at ``sigma8``,
-    it is converted at the boundary.
+    The model reads the axes of ``x_spec`` and nothing else. When ``x_spec``
+    also declares derived parameters (:mod:`jet.derived`), converting into them
+    is the caller's job and happens before the call::
+
+        emulator.predict(emulator.x_spec.frame("sigma8").to_base(X))
+
+    Keeping the substitution outside means a parameter array has exactly one
+    interpretation at the point the model sees it, and the conversion is
+    visible in the code that relies on it.
     """
 
     def __init__(
@@ -272,7 +275,7 @@ class Emulator:
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
-    def fit(self, X: np.ndarray, y: np.ndarray, frame: str | None = None) -> Emulator:
+    def fit(self, X: np.ndarray, y: np.ndarray) -> Emulator:
         """Train the transform chains and the backend.
 
         Parameters
@@ -280,20 +283,14 @@ class Emulator:
         X : array-like of shape (n_samples, x_spec.dim)
             Raw parameter values, columns in ``x_spec`` order. Arbitrary points,
             not a grid: the emulator knows nothing about Cartesian structure.
-            When ``frame`` is given, the column it names holds the derived
-            parameter instead of the axis it stands in for.
         y : array-like of shape (n_samples, y_spec.dim)
             Raw data vectors, matching ``y_spec``.
-        frame : str, optional
-            Name of a derived parameter to read ``X`` in, e.g. ``"sigma8"``.
-            See :meth:`jet.spec.ParameterSpec.frame`.
 
         Returns
         -------
         Emulator
             ``self``, fitted.
         """
-        X = self._to_base_frame(X, frame)
         X = self._validate_X(X, "X")
         y = self._validate_y(y, "y")
         if X.shape[0] != y.shape[0]:
@@ -313,27 +310,19 @@ class Emulator:
     # Prediction
     # ------------------------------------------------------------------
     def predict(
-        self, X: np.ndarray, return_std: bool = True, frame: str | None = None
+        self, X: np.ndarray, return_std: bool = True
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """Predict data vectors at raw parameter points.
 
         Parameters
         ----------
         X : array-like of shape (n_samples, x_spec.dim)
-            Raw parameter values, columns in ``x_spec`` order. When ``frame``
-            is given, the column it names holds the derived parameter instead
-            of the axis it stands in for.
+            Raw parameter values, columns in ``x_spec`` order.
         return_std : bool, optional
             Also return the predictive standard deviation. When the backend
             does not report one -- the neural-network backend currently does
             not -- this raises rather than returning zeros, because an array of
             zeros downstream reads as perfect certainty.
-        frame : str, optional
-            Name of a derived parameter to read ``X`` in, e.g. ``"sigma8"``.
-            The values are substituted back into the frame the model was
-            trained on before anything else happens, so a model trained on
-            ``As`` can be driven by ``sigma8`` without being retrained. See
-            :meth:`jet.spec.ParameterSpec.frame`.
 
         Returns
         -------
@@ -344,7 +333,6 @@ class Emulator:
             predictive spread and the effect of the inverse transform chain.
         """
         self._require_fitted()
-        X = self._to_base_frame(X, frame)
         X = self._validate_X(X, "X")
         if self.warn_on_extrapolation:
             self._warn_if_extrapolating(X)
@@ -533,21 +521,6 @@ class Emulator:
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
-    def _to_base_frame(self, X: Any, frame: str | None) -> Any:
-        """Substitute a derived parameter back into the frame the model uses.
-
-        Returns ``X`` untouched when no frame is named, so the common path pays
-        nothing for the feature.
-        """
-        if frame is None:
-            return X
-        if not self.x_spec.has_derived:
-            raise ValueError(
-                f"frame={frame!r} was requested, but this model's input spec declares "
-                "no derived parameters"
-            )
-        return self.x_spec.frame(frame).to_base(X)
-
     def _validate_X(self, X: Any, name: str) -> np.ndarray:
         """Coerce and shape-check an input array."""
         X = np.asarray(X, dtype=float)
