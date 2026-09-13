@@ -52,7 +52,10 @@ version = { file = "VERSION" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-filterwarnings = ["ignore::DeprecationWarning::"]
+filterwarnings = [
+    "ignore::DeprecationWarning::",
+    "ignore::sklearn.exceptions.ConvergenceWarning::",
+]
 # Keep the default run fast and CPU-only; anything needing a GPU or a real
 # simulation belongs in a script under examples/, not in the test suite.
 testpaths = ["tests"]
