@@ -19,17 +19,18 @@ have to compromise between very different scales. Fitting per column (after the
 output transform chain, which is typically where PCA has already decorrelated
 them) mirrors what ``csstemu`` does with its per-component ``gprinfo``.
 
-Two kernels are available, both multiplied by a constant amplitude:
-``ConstantKernel * RBF`` and ``ConstantKernel * Matern(nu=5/2)``. They are the
-two ``csstemu`` uses -- the power-spectrum emulator takes the first, the halo
-mass function the second -- so an existing ``csstemu`` bundle is representable
-in this format whichever it was trained with. That is the point of the shared
-``.npz`` layout.
+Three kernels are available, all multiplied by a constant amplitude:
+``ConstantKernel * RBF``, ``ConstantKernel * Matern(nu=5/2)`` and
+``ConstantKernel * Matern(nu=3/2)``. They are the three ``csstemu`` uses -- the
+power-spectrum emulator takes the first, the halo mass function the second and
+the halo-matter correlation function the third -- so an existing ``csstemu``
+bundle is representable in this format whichever it was trained with. That is
+the point of the shared ``.npz`` layout.
 
-The two differ in smoothness: an RBF sample path is infinitely differentiable,
-a Matern-5/2 path only twice. Both are evaluated here from the Euclidean
-distance between parameter points, so adding a third kernel means adding one
-expression to :func:`_kernel_matrix` and a key to :data:`KERNELS`.
+They differ in smoothness: an RBF sample path is infinitely differentiable, a
+Matern-5/2 path only twice, a Matern-3/2 path only once. All are evaluated here
+from the Euclidean distance between parameter points, so adding a kernel means
+adding one expression to :func:`_kernel_matrix` and a key to :data:`KERNELS`.
 """
 
 from __future__ import annotations
@@ -54,12 +55,17 @@ _MAX_JITTER_STEPS = 8
 #:
 #: ``"rbf"``
 #:     ``ConstantKernel * RBF``, the squared-exponential kernel.
+#: ``"matern32"``
+#:     ``ConstantKernel * Matern(nu=3/2)``, once-differentiable sample paths.
 #: ``"matern52"``
 #:     ``ConstantKernel * Matern(nu=5/2)``, twice-differentiable sample paths.
 #:
-#: Both are written in terms of the Euclidean distance ``r`` between two
+#: All are written in terms of the Euclidean distance ``r`` between two
 #: parameter points after dividing each coordinate by its length scale.
-KERNELS = ("rbf", "matern52")
+KERNELS = ("rbf", "matern32", "matern52")
+
+#: Multiplier of ``r`` inside the Matern-3/2 kernel, ``sqrt(3)``.
+_MATERN32_SQRT3 = float(np.sqrt(3.0))
 
 #: Multiplier of ``r`` inside the Matern-5/2 kernel, ``sqrt(5)``.
 _MATERN52_SQRT5 = float(np.sqrt(5.0))
@@ -91,13 +97,14 @@ class GPBackend(Backend):
 
     Parameters
     ----------
-    kernel : {"rbf", "matern52"}, optional
+    kernel : {"rbf", "matern32", "matern52"}, optional
         Kernel shape, multiplied by a constant amplitude. ``"rbf"`` is the
-        squared-exponential kernel; ``"matern52"`` is the Matern kernel with
-        ``nu = 5/2``, whose sample paths are twice differentiable. Both are
-        anisotropic: one length scale per input feature. The reference
-        implementation uses ``"rbf"`` for its power spectrum and
-        ``"matern52"`` for its halo mass function.
+        squared-exponential kernel; ``"matern32"`` and ``"matern52"`` are the
+        Matern kernels with ``nu = 3/2`` (once differentiable) and ``nu = 5/2``
+        (twice differentiable). All are anisotropic: one length scale per input
+        feature. The reference implementation uses ``"rbf"`` for its linear
+        power spectrum, ``"matern32"`` for its halo-matter correlation function
+        and ``"matern52"`` for its halo mass function.
     alpha : float, optional
         Noise floor added to the diagonal of the training covariance. This is
         a numerical regulariser (the emulator treats simulation outputs as
@@ -451,7 +458,7 @@ def _kernel_matrix(
         Kernel amplitude.
     length_scale : ndarray of shape (d,)
         One length scale per feature.
-    kernel : {"rbf", "matern52"}, optional
+    kernel : {"rbf", "matern32", "matern52"}, optional
         Kernel shape. See :data:`KERNELS`.
 
     Returns
@@ -461,18 +468,28 @@ def _kernel_matrix(
 
     Notes
     -----
-    The Matern kernel is written in terms of the Euclidean distance ``r``, so
-    the squared distances the Gram trick returns have to be square-rooted. The
-    square root is taken of a value already clipped at zero, and the kernel is
-    flat in ``r`` at the origin, so the ``sqrt`` has no branch point to worry
-    about at ``r = 0`` -- unlike the Matern with ``nu = 3/2``, whose derivative
-    is discontinuous there.
+    Both Matern kernels are written in terms of the Euclidean distance ``r``,
+    so the squared distances the Gram trick returns have to be square-rooted.
+    The square root is taken of a value already clipped at zero, so there is no
+    branch point at ``r = 0``. The kernel *value* is well defined there for
+    every ``nu`` -- the Matern-3/2 path has a kink in its derivative at the
+    origin, but evaluating it needs no special case.
+
+    That kink is the reason ``nu = 3/2`` is only safe to fit with a fixed
+    kernel: a hyperparameter optimiser differentiating through ``r = 0`` follows
+    a subgradient that changes discontinuously under a perturbation of the
+    length scale. Every bundle stored with this key was trained by the
+    reference, which fixed its hyperparameters, and the bundles are rebuilt
+    rather than refitted here, so the gradient path is never exercised.
     """
     squared = _squared_distance(a / length_scale, b / length_scale)
     if kernel == "rbf":
         # Kept on the squared distance: routing it through a square root and
         # back would cost accuracy for nothing.
         return constant_value * np.exp(-0.5 * squared)
+    if kernel == "matern32":
+        scaled = _MATERN32_SQRT3 * np.sqrt(squared)
+        return constant_value * (1.0 + scaled) * np.exp(-scaled)
     if kernel == "matern52":
         scaled = _MATERN52_SQRT5 * np.sqrt(squared)
         return constant_value * (1.0 + scaled + scaled**2 / 3.0) * np.exp(-scaled)
@@ -549,7 +566,7 @@ def _require_sklearn(kernel: str = "rbf") -> tuple[Any, Any, Any]:
 
     Parameters
     ----------
-    kernel : {"rbf", "matern52"}
+    kernel : {"rbf", "matern32", "matern52"}
         Which kernel class to return alongside the amplitude and the regressor.
 
     Returns
@@ -573,6 +590,8 @@ def _require_sklearn(kernel: str = "rbf") -> tuple[Any, Any, Any]:
 
     if kernel == "rbf":
         cls = RBF
+    elif kernel == "matern32":
+        cls = functools.partial(Matern, nu=1.5)
     elif kernel == "matern52":
         cls = functools.partial(Matern, nu=2.5)
     else:  # pragma: no cover - GPBackend validates before reaching here

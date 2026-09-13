@@ -162,7 +162,7 @@ class TestGPBackend(unittest.TestCase):
 
     def test_rejects_an_unknown_kernel(self) -> None:
         with self.assertRaises(ValueError) as caught:
-            GPBackend(kernel="matern32")
+            GPBackend(kernel="matern12")
         self.assertIn("matern52", str(caught.exception))
 
     def test_kernel_name_survives_a_state_roundtrip(self) -> None:
