@@ -440,12 +440,14 @@ class TestEmulatorFitting(unittest.TestCase):
         path = self.emulator.save(self.dir / "wp.gp", extra_arrays={"k": np.arange(4.0)})
         extra = load_bundle(path)["extra_arrays"]
         np.testing.assert_array_equal(extra["k"], np.arange(4.0))
-        # The emulator itself must still load, ignoring what it does not know.
-        Emulator.load(path)
+        # The loaded emulator exposes the same arrays on ``extra_arrays``,
+        # with whatever keys the writer chose.
+        restored = Emulator.load(path)
+        np.testing.assert_array_equal(restored.extra_arrays["k"], np.arange(4.0))
 
-    def test_bundle_without_extra_arrays_reports_none(self) -> None:
+    def test_load_without_extra_arrays_has_empty_dict(self) -> None:
         path = self.emulator.save(self.dir / "wp.plain.gp")
-        self.assertEqual(load_bundle(path)["extra_arrays"], {})
+        self.assertEqual(Emulator.load(path).extra_arrays, {})
 
     def test_saved_bundle_honours_the_umask(self) -> None:
         """A model written to shared storage must be readable by the group.
