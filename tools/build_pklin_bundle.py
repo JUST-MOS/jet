@@ -61,6 +61,7 @@ from jet.emulator.pklin import (  # noqa: E402
     N_K,
     N_Z,
     Z_GRID,
+    ZGRID_KEY,
     data_dir,
     data_vector_spec,
     theta_spec,
@@ -255,7 +256,7 @@ def build(source: Path, destination: Path, verbose: bool = True) -> Path:
         },
         # The wavenumber grid travels inside the bundle: a sibling file would be
         # one more thing to copy, and the two could silently disagree.
-        extra_arrays={KGRID_KEY: np.load(kfile)},
+        extra_arrays={KGRID_KEY: np.load(kfile), ZGRID_KEY: np.asarray(Z_GRID)},
     )
 
     if verbose:

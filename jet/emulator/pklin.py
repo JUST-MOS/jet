@@ -38,6 +38,7 @@ from .emulator import Emulator, data_dir, resolve_weights_path
 __all__ = [
     "BUNDLE_NAME",
     "KGRID_KEY",
+    "ZGRID_KEY",
     "N_K",
     "N_Z",
     "N_BINS",
@@ -45,6 +46,7 @@ __all__ = [
     "INTEGRATION_K",
     "data_dir",
     "k_grid",
+    "z_grid",
     "theta_spec",
     "data_vector_spec",
     "load_pklin_emulator",
@@ -61,6 +63,11 @@ BUNDLE_NAME = "pklin.gp.npz"
 #: Bundle key holding the wavenumber grid of the data vector. It travels inside
 #: the bundle rather than as a sibling file, so that the two cannot drift apart.
 KGRID_KEY = "k"
+
+#: Bundle key holding the redshift grid, written by the builder since v0.2.0.
+#: Older bundles carry only ``k``; :func:`z_grid` then falls back to
+#: :data:`Z_GRID`.
+ZGRID_KEY = "z"
 
 #: Redshifts of the grid, ascending. Row 0 is ``z = 0``.
 Z_GRID: tuple[float, ...] = (0.0, 0.1, 0.25, 0.5, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
@@ -114,6 +121,20 @@ def k_grid() -> np.ndarray:
             "one and cannot be interpreted. Rebuild it with tools/build_pklin_bundle.py"
         )
     return extras[KGRID_KEY]
+
+
+@lru_cache(maxsize=1)
+def z_grid() -> np.ndarray:
+    """Return the redshifts of the data vector, ascending (``z = 0`` first).
+
+    Read from the bundle when present; bundles written before the redshift
+    grid was stored carry only ``k``, in which case the module-level
+    :data:`Z_GRID` constant is used.
+    """
+    extras = _extra_arrays()
+    if ZGRID_KEY in extras:
+        return extras[ZGRID_KEY]
+    return np.asarray(Z_GRID)
 
 
 def theta_spec() -> ParameterSpec:
@@ -201,7 +222,7 @@ def log_pk_at(log10_Pk: np.ndarray, z: float = 0.0) -> np.ndarray:
     out = np.empty((grid.shape[0], k.size), dtype=float)
 
     for row in range(grid.shape[0]):
-        spline = RectBivariateSpline(Z_GRID, log_k, grid[row], kx=3, ky=1, bbox=_SPLINE_BBOX, s=0)
+        spline = RectBivariateSpline(z_grid(), log_k, grid[row], kx=3, ky=1, bbox=_SPLINE_BBOX, s=0)
         out[row] = spline(z, log_k)[0]
 
     return out

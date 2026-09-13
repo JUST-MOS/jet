@@ -117,15 +117,10 @@ def _replace_asset(release: dict, path: Path, repo: str, token: str) -> None:
         delete_url = f"{_API}/{repo}/releases/assets/{existing[0]['id']}"
         _request("DELETE", delete_url, token)
 
-    upload_url = (
-        f"{_UPLOADS}/{repo}/releases/{release_id}/assets"
-        f"?name={urllib.parse.quote(name)}"
-    )
+    upload_url = f"{_UPLOADS}/{repo}/releases/{release_id}/assets?name={urllib.parse.quote(name)}"
     with open(path, "rb") as handle:
         payload = handle.read()
-    _request(
-        "POST", upload_url, token, data=payload, content_type="application/octet-stream"
-    )
+    _request("POST", upload_url, token, data=payload, content_type="application/octet-stream")
 
 
 def main() -> int:

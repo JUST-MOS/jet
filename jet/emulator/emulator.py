@@ -395,6 +395,7 @@ class Emulator:
         self.x_chain: list[Transform] = []
         self.y_chain: list[Transform] = []
         self.manifest: dict[str, Any] = {}
+        self.extra_arrays: dict[str, np.ndarray] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -540,6 +541,7 @@ class Emulator:
             extra_arrays=extra_arrays,
         )
         self.manifest = load_bundle(written)["manifest"]
+        self.extra_arrays = load_bundle(written)["extra_arrays"]
         return written
 
     @classmethod
@@ -566,7 +568,11 @@ class Emulator:
         Returns
         -------
         Emulator
-            The restored model.
+            The restored model. Its ``extra_arrays`` attribute holds the
+            supporting arrays the writer stored verbatim (grids, layout
+            metadata, k/z, ...), with whatever keys the writer chose
+            -- there is deliberately no shared schema between statistics, so a
+            consumer reads the keys its own bundle's writer documented.
         """
         resolved = resolve_weights_path(path)
         loaded = load_bundle(resolved)
@@ -580,6 +586,7 @@ class Emulator:
         emulator.x_chain = loaded["x_chain"]
         emulator.y_chain = loaded["y_chain"]
         emulator.manifest = loaded["manifest"]
+        emulator.extra_arrays = loaded["extra_arrays"]
 
         if x_spec is not None or y_spec is not None:
             emulator.verify(x_spec=x_spec, y_spec=y_spec)
