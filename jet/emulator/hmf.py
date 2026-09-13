@@ -101,6 +101,8 @@ __all__ = [
     "load_hmf_emulator",
     "castro23_dndlnM",
     "castro23_cumulative",
+    "castro23_multiplicity",
+    "castro23_bias",
     "HMFEmulator",
 ]
 
@@ -364,6 +366,34 @@ def castro23_dndlnM(
     ndarray of shape (n_samples, n_z, n_M)
         :math:`dn/d\ln M` in :math:`(h/\mathrm{Mpc})^3`.
     """
+    nu, multiplicity, prefactor = _castro23_terms(theta, z, M, coefficients, pk_emulator)
+    del nu
+    return multiplicity * prefactor
+
+
+def _castro23_terms(
+    theta: np.ndarray,
+    z: np.ndarray | None,
+    M: np.ndarray | None,
+    coefficients: np.ndarray | None,
+    pk_emulator: Emulator | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    r"""Return the three pieces every Castro23 quantity is built from.
+
+    The mass function is :math:`\nu f(\nu) \times \rho_m/M\,|d\ln\sigma/d\ln R|`,
+    and the linear bias is a derivative of the first factor alone with respect
+    to :math:`\ln\nu`. Returning them separately keeps one implementation of the
+    eight coefficients in the package: the alternative -- a second module
+    recomputing :math:`\nu f(\nu)` for the bias -- is a way for the two to
+    disagree, and the coefficients are the only thing that changes per mass
+    definition.
+
+    Returns
+    -------
+    nu, multiplicity, prefactor : ndarray of shape (n_samples, n_z, n_M)
+        :math:`\nu = \delta_c/\sigma`, :math:`\nu f(\nu)`, and
+        :math:`\rho_m/M\,(-d\ln\sigma/d\ln R/3)`.
+    """
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
     coefficients = (
         castro23_coefficients() if coefficients is None else np.asarray(coefficients, dtype=float)
@@ -375,7 +405,10 @@ def castro23_dndlnM(
 
     columns = _column_indices()
     a1, a2, az, p1, p2, q1, q2, qz = coefficients
-    out = np.empty((theta.shape[0], z.size, M.size), dtype=float)
+    shape = (theta.shape[0], z.size, M.size)
+    nu_out = np.empty(shape, dtype=float)
+    multiplicity_out = np.empty(shape, dtype=float)
+    prefactor_out = np.empty(shape, dtype=float)
 
     for row, parameters in enumerate(theta):
         cosmo = Cosmology(
@@ -428,7 +461,113 @@ def castro23_dndlnM(
                 * (1.0 + 1.0 / (a * nu**2) ** p)
                 * (np.sqrt(a) * nu) ** (q - 1.0)
             )
-            out[row, index] = multiplicity * rho_m / M * (-dln_sigma_dln_r / 3.0)
+            nu_out[row, index] = nu
+            multiplicity_out[row, index] = multiplicity
+            prefactor_out[row, index] = rho_m / M * (-dln_sigma_dln_r / 3.0)
+
+    return nu_out, multiplicity_out, prefactor_out
+
+
+def castro23_multiplicity(
+    theta: np.ndarray,
+    z: np.ndarray | None = None,
+    M: np.ndarray | None = None,
+    coefficients: np.ndarray | None = None,
+    pk_emulator: Emulator | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    r"""Return :math:`\nu` and :math:`\nu f(\nu)`.
+
+    The two factors :func:`castro23_bias` differentiates. Exposed because a
+    caller with a different prescription for the :math:`\rho_m/M\,|d\ln\sigma/d\ln R|`
+    prefactor still wants the same multiplicity function rather than a second
+    transcription of Castro23's coefficients.
+
+    Parameters
+    ----------
+    theta, z, M, coefficients, pk_emulator
+        As in :func:`castro23_dndlnM`.
+
+    Returns
+    -------
+    nu, multiplicity : tuple of ndarray of shape (n_samples, n_z, n_M)
+        :math:`\nu = \delta_c/\sigma` and the multiplicity :math:`\nu f(\nu)`.
+    """
+    nu, multiplicity, _ = _castro23_terms(theta, z, M, coefficients, pk_emulator)
+    return nu, multiplicity
+
+
+def castro23_bias(
+    theta: np.ndarray,
+    z: np.ndarray | None = None,
+    M: np.ndarray | None = None,
+    coefficients: np.ndarray | None = None,
+    pk_emulator: Emulator | None = None,
+) -> np.ndarray:
+    r"""Evaluate the Castro23 linear halo bias.
+
+    Computes
+
+    .. math::
+        b(M) = 1 - \frac{1}{\delta_c} \frac{d\ln \nu f(\nu)}{d\ln \nu}
+
+    which is the large-scale limit of the peak-background split, evaluated by
+    numerical differentiation of the multiplicity function the mass function
+    uses. The derivative is taken with :func:`numpy.gradient` on a mass grid the
+    caller supplies, so the grid must be strictly increasing and fine enough for
+    a finite difference to be meaningful.
+
+    Parameters
+    ----------
+    theta : ndarray of shape (n_samples, 8)
+        Cosmological parameters, columns in :func:`theta_spec` order.
+    z : ndarray, optional
+        Redshifts. Defaults to :func:`z_grid`.
+    M : ndarray, optional
+        Halo masses in :math:`M_\odot/h`, strictly increasing. Defaults to
+        :data:`FINE_CENTERS`.
+    coefficients : ndarray, optional
+        The eight Castro23 coefficients. Defaults to the bundled set.
+    pk_emulator : Emulator, optional
+        Power-spectrum emulator used for :math:`\sigma_{cb}`.
+
+    Returns
+    -------
+    ndarray of shape (n_samples, n_z, n_M)
+        The bias, dimensionless.
+    """
+    theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    z = z_grid() if z is None else np.atleast_1d(np.asarray(z, dtype=float))
+    M = FINE_CENTERS if M is None else np.atleast_1d(np.asarray(M, dtype=float))
+    if M.size < 2:
+        raise ValueError("a numerical derivative needs at least two masses")
+    if not np.all(np.diff(M) > 0.0):
+        raise ValueError("M must be strictly increasing for the derivative to mean anything")
+
+    # The reference pads the mass grid by 5 per cent at each end before
+    # differentiating and drops the two padded columns afterwards, so that the
+    # one-sided difference at the ends of the requested grid does not leak into
+    # the answer. Reproduced here because the values are compared point by
+    # point.
+    padded = np.insert(M, [0, M.size], [0.95 * M.min(), 1.05 * M.max()])
+    nu, multiplicity = castro23_multiplicity(
+        theta, z=z, M=padded, coefficients=coefficients, pk_emulator=pk_emulator
+    )
+
+    out = np.empty((theta.shape[0], z.size, M.size), dtype=float)
+    for row, parameters in enumerate(theta):
+        columns = _column_indices()
+        cosmo = Cosmology(
+            Omegab=parameters[columns["Omegab"]],
+            Omegam=parameters[columns["Omegam"]],
+            H0=parameters[columns["H0"]],
+            w0=parameters[columns["w0"]],
+            wa=parameters[columns["wa"]],
+            mnu=parameters[columns["mnu"]],
+        )
+        for index, redshift in enumerate(z):
+            delta_c = _delta_c(redshift, cosmo)
+            slope = np.gradient(np.log(multiplicity[row, index]), np.log(nu[row, index]))
+            out[row, index] = (1.0 - slope / delta_c)[1:-1]
 
     return out
 
