@@ -52,6 +52,7 @@ __all__ = [
     "load_pklin_emulator",
     "pk_grid",
     "log_pk_at",
+    "log_pk_at_k",
     "sigma_of_log_pk",
     "sigma_of_pk",
     "sigma8_of_pk",
@@ -225,6 +226,66 @@ def log_pk_at(log10_Pk: np.ndarray, z: float = 0.0) -> np.ndarray:
         spline = RectBivariateSpline(z_grid(), log_k, grid[row], kx=3, ky=1, bbox=_SPLINE_BBOX, s=0)
         out[row] = spline(z, log_k)[0]
 
+    return out
+
+
+def log_pk_at_k(
+    log10_Pk: np.ndarray, k: float | np.ndarray, z: float | np.ndarray = 0.0
+) -> np.ndarray:
+    r"""Interpolate :math:`\log_{10} P(k, z)` onto arbitrary wavenumbers.
+
+    Same bivariate spline as :func:`log_pk_at` -- cubic in redshift, linear in
+    :math:`\log_{10} k` -- but evaluated on the caller's own wavenumbers instead
+    of the emulator's grid. Correlation functions need this: the FFTLog
+    transform wants a power of two samples on its own log-spaced grid, and
+    resampling the emulator's grid instead would put a second interpolation
+    between the emulator and the integral.
+
+    .. note::
+        Values of ``k`` above :func:`k_grid`'s maximum are extrapolated, not
+        clamped: the spline's bounding box runs out to :math:`k = 10^6`, which
+        is what the reference does. Callers that integrate past the emulator's
+        range depend on that extrapolation, so it is deliberate rather than
+        incidental.
+
+    Parameters
+    ----------
+    log10_Pk : ndarray of shape (n_samples, N_BINS)
+        Data vectors in :math:`\log_{10}` of the physical power spectrum.
+    k : float or array-like
+        Wavenumbers in :math:`h/\mathrm{Mpc}`.
+    z : float or array-like, optional
+        Redshift(s).
+
+    Returns
+    -------
+    ndarray of shape (n_samples, n_z, n_k)
+        :math:`\log_{10} P(k, z)`, still in log space. Both trailing axes are
+        squeezed when their argument is scalar.
+    """
+    from scipy.interpolate import RectBivariateSpline
+
+    grid = pk_grid(log10_Pk)
+    k_arr = np.atleast_1d(np.asarray(k, dtype=float))
+    z_arr = np.atleast_1d(np.asarray(z, dtype=float))
+    if np.any(k_arr <= 0.0):
+        raise ValueError(f"k must be strictly positive, got {k_arr.min()}")
+
+    log_k = np.log10(k_arr)
+    log_k_grid = np.log10(k_grid())
+    z_axis = z_grid()
+
+    out = np.empty((grid.shape[0], z_arr.size, log_k.size), dtype=float)
+    for row in range(grid.shape[0]):
+        spline = RectBivariateSpline(
+            z_axis, log_k_grid, grid[row], kx=3, ky=1, bbox=_SPLINE_BBOX, s=0
+        )
+        out[row] = spline(z_arr, log_k)
+
+    if np.ndim(z) == 0:
+        out = out[:, 0, :]
+    if np.ndim(k) == 0:
+        out = out[..., 0]
     return out
 
 
