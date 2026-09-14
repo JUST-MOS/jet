@@ -14,8 +14,11 @@ which is not a dependency of the package.
 """
 
 import matplotlib.pyplot as plt
+import numpy as np
 
-from jet.emulator.hmf_bcm import PARAMETER_DEFAULTS, BCMHFEmulator, mass_grid, theta_spec
+from jet.emulator.hmf_bcm import BCMHFEmulator, mass_grid, theta_spec
+
+theta_default = np.array([15, 1.5, 3.5, 4.5])
 
 emu = BCMHFEmulator.load()
 M = mass_grid()
@@ -25,21 +28,21 @@ fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 # Left and middle: the cumulative abundance and its derivative, for the default
 # point, which is where a caller starts.
 ax = axes[0]
-n = emu.cumulative(PARAMETER_DEFAULTS[None, :])[0]
+n = emu.cumulative(theta_default[None, :])[0]
 ax.loglog(M, n)
 ax.set(xlabel="M  [Msun/h]", ylabel="n(>=M)  [(h/Mpc)^3]", title="reference defaults")
 
 ax = axes[1]
-ax.semilogx(M, emu.dndlgM(PARAMETER_DEFAULTS[None, :])[0])
+ax.loglog(M, emu.dndlgM(theta_default[None, :])[0])
 ax.set(xlabel="M  [Msun/h]", ylabel="dn/dlog10(M)", title="differential (binned)")
 
 # Right: the baryon axis, which is what this model is for.
 ax = axes[2]
-for log_mc in (11.0, 12.0, 13.0, 14.0, 15.0):
-    theta = PARAMETER_DEFAULTS.copy()
+for log_mc in (14.0, 15.0, 16.0):
+    theta = np.copy(theta_default)
     theta[theta_spec().index("logMc")] = log_mc
-    ax.loglog(M, emu.cumulative(theta[None, :])[0], label=f"logMc = {log_mc:.0f}")
-ax.set(xlabel="M  [Msun/h]", ylabel="n(>=M)  [(h/Mpc)^3]", title="varying the feedback scale")
+    ax.loglog(M, emu.cumulative(theta[None, :])[0] / n, label=f"logMc = {log_mc:.0f}")
+ax.set(xlabel="M  [Msun/h]", ylabel="n(>=M) ratio", title="varying the feedback scale")
 ax.legend(fontsize=7)
 
 for ax in axes:
