@@ -179,6 +179,44 @@ whole interface.
 > `python tools/build_hmf_bundle.py`. The baseline's physics works without it;
 > only the emulated part raises.
 
+## Halo mass function with baryonic feedback
+
+`BCMHFEmulator` predicts the cumulative abundance with the baryon correction
+model of Arico et al., over four **feedback parameters and no cosmological
+ones**:
+
+```python
+from jet.emulator.hmf_bcm import BCMHFEmulator, PARAMETER_DEFAULTS, mass_grid
+
+emu = BCMHFEmulator.load()
+n = emu.cumulative(PARAMETER_DEFAULTS[None, :])  # (1, 46) in (h/Mpc)^3
+d = emu.dndlgM(PARAMETER_DEFAULTS[None, :])  # dn/dlog10(M)
+M = mass_grid()  # the 46 masses, in Msun/h — the grid travels in the bundle
+```
+
+`theta` is an `(n_samples, 4)` array — or a single row — in `theta_spec()` order:
+`logMc`, `thej`, `mu`, `delta`.
+
+Three things set it apart from the model above:
+
+- **It takes no cosmological parameters.** This is the one bundled model whose
+  input is not a cosmology; its four parameters are declared under
+  `block="baryon"`, so they can be concatenated with a cosmological spec when a
+  joint model is eventually needed. That is what `ParameterSpec.subset()` is for.
+- **It is one cosmology at one redshift.** The weights encode `c0000` at
+  `z = 0.5` and there is no axis along which either can vary. The bundle records
+  both as provenance; neither is extrapolated over.
+- **The mass grid is fixed and rectangular.** No interpolation, no baseline, no
+  per-redshift blocks — the reference is a plain regression of `log10 n(>=M)`
+  onto four numbers, and the module is correspondingly small.
+
+See [`examples/hmf_bcm_example.py`](examples/hmf_bcm_example.py) for a runnable
+walkthrough.
+
+> [!NOTE]
+> `jet/data/hmf_bcm_m200m.gp.npz` is not tracked either. Generate it with
+> `python tools/build_hmf_bcm_bundle.py`.
+
 ## Halo-matter correlation function
 
 `XiHMEmulator` predicts the cross-correlation between a halo sample and the
@@ -277,6 +315,7 @@ jet/
 │   ├── emulator/           # transforms, backends, bundle format, metrics
 │   │   ├── pklin.py        # reader for the bundled linear-theory P(k) emulator
 │   │   ├── hmf.py          # halo mass function: the emulator and its baseline
+│   │   ├── hmf_bcm.py      # the same with baryonic feedback: no cosmology at all
 │   │   ├── bhm.py          # halo bias: the emulator, the baseline, the inversion
 │   │   └── xihm.py         # halo-matter correlation function, composed from those
 │   ├── data/               # bundled weights (not tracked by git; see its README)
@@ -286,10 +325,12 @@ jet/
 ├── tools/                  # one-off scripts that regenerate bundled data
 │   ├── build_pklin_bundle.py
 │   ├── build_hmf_bundle.py
+│   ├── build_hmf_bcm_bundle.py
 │   └── build_xihm_bundle.py
 ├── tests/                  # unittest suite, run via pytest
 ├── examples/               # usage notebooks
 │   ├── hmf.ipynb           #   halo mass function quick start
+│   ├── hmf_bcm_example.py  #   baryonic mass function quick start
 │   └── xihm_example.py     #   halo-matter bias ratio quick start
 ├── environment.yml         # shared development environment (conda + pip)
 ├── VERSION                 # single source of truth for the version (bump2version-owned)

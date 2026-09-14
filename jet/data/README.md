@@ -57,6 +57,26 @@ weights; the two are asserted equal where both are present.
 Every component was trained with a Matern kernel of order `nu = 3/2`, which is
 the reason `jet.emulator.backends.gp` carries a `"matern32"` key.
 
+## `hmf_bcm_m200m.gp.npz`
+
+The cumulative halo abundance with baryonic feedback, backing
+`jet.emulator.hmf_bcm.BCMHFEmulator`. It is the one bundle whose input is **not
+a cosmology**: four Arico et al. feedback parameters, declared under
+`block="baryon"`, and nothing else.
+
+The weights encode `c0000` at `z = 0.5` and there is no axis along which either
+can vary, so unlike every other bundle this one describes a single point in
+cosmology and time. The output is a plain 46-point rectangle on a fixed mass
+grid, which travels inside the bundle — no baseline, no per-redshift blocks, no
+interpolation.
+
+The one thing worth knowing before touching the builder: the reference stores a
+fitted `WhiteKernel` noise level per component alongside a `ConstantKernel * Matern`,
+and the stored dual coefficients show that the noise term is not in the arithmetic —
+they reproduce the plain kernel with the shared `1e-10` floor, not that kernel plus
+the stored level. So the bundle carries `1e-10` and records the levels in the
+manifest as provenance.
+
 ## `bhm_rockstar_m200m.gp.npz`
 
 The halo bias divided by its Castro23 baseline, on the same 12 by 6 axes,
@@ -85,9 +105,12 @@ python tools/build_hmf_bundle.py --source <dir>    # another checkout
 
 python tools/build_xihm_bundle.py                  # default source path
 python tools/build_xihm_bundle.py --source <dir>   # another checkout
+
+python tools/build_hmf_bcm_bundle.py               # default source path
+python tools/build_hmf_bcm_bundle.py --source <dir>  # another checkout
 ```
 
-All three scripts read the reference arrays, repackage them, and then **verify
+All four scripts read the reference arrays, repackage them, and then **verify
 the result against the reference implementation** if that implementation is
 importable — refusing the build when the two disagree by more than floating-point
 round-off. `build_hmf_bundle.py` checks the regression and the baseline
@@ -95,6 +118,15 @@ separately; `build_xihm_bundle.py` checks each layer of the correlation function
 separately, because the failures are independent and a single number would not
 say which one broke. Run them after changing anything about the transform
 chains, the parameter bounds, or the ported physics.
+
+`build_hmf_bcm_bundle.py` is the exception to the "compare against the stored
+coefficients" habit, and the reason is worth carrying over to any future port.
+Those coefficients are the regression's *targets*, and a Gaussian process with a
+non-zero floor does not return its targets: the reference disagrees with its own
+stored table by `1.7e-7`, because the `10**` at the end of its chain amplifies a
+score-space residual of `1e-9`. This bundle disagrees with them by `1.7e-7` as
+well — the same number — which is why that check carries a loose tolerance and
+does the real work against the reference's *process* instead.
 
 `build_xihm_bundle.py` builds two files and checks nine things, and the split is
 worth understanding before relaxing any of its tolerances:
