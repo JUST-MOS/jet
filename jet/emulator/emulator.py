@@ -67,7 +67,7 @@ NO_AUTO_FETCH_ENV = "JET_NO_AUTO_FETCH"
 #: Repository whose release assets hold the bundled weights. Override for a
 #: fork or mirror with ``JET_RELEASE_REPO``.
 RELEASE_REPO_ENV = "JET_RELEASE_REPO"
-DEFAULT_RELEASE_REPO = "czymh/jet"
+DEFAULT_RELEASE_REPO = "JUST-MOS/jet"
 
 #: Pin a specific release tag instead of the latest one.
 RELEASE_TAG_ENV = "JET_RELEASE_TAG"

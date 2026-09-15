@@ -46,7 +46,7 @@ pip install jet[all]         # everything
 From source, for development:
 
 ```bash
-git clone git@github.com:czymh/jet.git
+git clone git@github.com:JUST-MOS/jet.git
 cd jet
 pip install -e ".[test,gp]"
 pytest
@@ -55,7 +55,7 @@ pytest
 Or straight from GitHub:
 
 ```bash
-pip install git+https://github.com/czymh/jet.git@<tag>
+pip install git+https://github.com/JUST-MOS/jet.git@<tag>
 ```
 
 ## Quickstart

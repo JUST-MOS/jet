@@ -35,7 +35,7 @@ SELF="${BASH_SOURCE[0]}"
 
 SHARED_ENV="${JET_SHARED_ENV:-/home/chenzhao/.conda/envs/jet}"
 SHARED_DATA="${JET_SHARED_DATA:-/home/chenzhao/worksoftware/jet/jet/data}"
-REPO="${JET_REPO:-git+https://github.com/czymh/jet.git@dev}"
+REPO="${JET_REPO:-git+https://github.com/JUST-MOS/jet.git@dev}"
 KERNEL_NAME="${JET_KERNEL_NAME:-jet}"
 PY="$SHARED_ENV/bin/python"
 

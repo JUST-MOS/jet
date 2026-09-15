@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DEFAULT_REPO = "czymh/jet"
+DEFAULT_REPO = "JUST-MOS/jet"
 
 _API = "https://api.github.com/repos"
 _UPLOADS = "https://uploads.github.com/repos"
