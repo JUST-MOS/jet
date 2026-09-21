@@ -46,7 +46,7 @@ pip install jet[all]         # everything
 From source, for development:
 
 ```bash
-git clone git@github.com:czymh/jet.git
+git clone git@github.com:JUST-MOS/jet.git
 cd jet
 pip install -e ".[test,gp]"
 pytest
@@ -55,7 +55,7 @@ pytest
 Or straight from GitHub:
 
 ```bash
-pip install git+https://github.com/czymh/jet.git@<tag>
+pip install git+https://github.com/JUST-MOS/jet.git@<tag>
 ```
 
 ## Quickstart
@@ -345,8 +345,7 @@ For the group, one shared conda environment is enough; `jet` itself is always
 installed with pip on top of it:
 
 ```bash
-module load anaconda/anaconda-mamba
-mamba env create -f environment.yml      # or: conda activate /path/to/existing/env
+conda env create -f environment.yml      # or: conda activate /path/to/existing/env
 conda activate jet
 pip install -e ".[test,gp]"
 ```

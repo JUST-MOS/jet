@@ -41,7 +41,7 @@ standard-layout (flat) Python package with ACM-style version management
 
 - `README.md` (Markdown, auto-rendered on GitHub).
 - Structure: status badges (CI / coverage / docs) at top, then Introduction, install command
-  (`pip install git+https://github.com/czymh/jet.git@<tag>`), quickstart, directory overview, contributing/license.
+  (`pip install git+https://github.com/JUST-MOS/jet.git@<tag>`), quickstart, directory overview, contributing/license.
 
 ## Version management (bump2version, ACM-style)
 

@@ -33,7 +33,7 @@ all = ["jet[gp,nn,inf,io]"]
 test = ["pytest", "pytest-cov"]
 
 [project.urls]
-Repository = "https://github.com/czymh/jet"
+Repository = "https://github.com/JUST-MOS/jet"
 
 [tool.setuptools]
 # Standard flat layout: package lives at the repository root. Subpackages must
