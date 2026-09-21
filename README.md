@@ -345,8 +345,7 @@ For the group, one shared conda environment is enough; `jet` itself is always
 installed with pip on top of it:
 
 ```bash
-module load anaconda/anaconda-mamba
-mamba env create -f environment.yml      # or: conda activate /path/to/existing/env
+conda env create -f environment.yml      # or: conda activate /path/to/existing/env
 conda activate jet
 pip install -e ".[test,gp]"
 ```
