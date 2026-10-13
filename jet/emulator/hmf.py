@@ -250,7 +250,15 @@ def theta_spec() -> ParameterSpec:
     """Return the input specification of the bundled emulator.
 
     The same eight cosmological parameters as the power-spectrum bundle,
-    declared once in :func:`jet.cosmology.cosmo_parameter_spec`.
+    declared once in :func:`jet.cosmology.cosmo_parameter_spec`. The column
+    order — which is also the order of any ``theta`` array this module
+    accepts — is ``Omegab, Omegam, H0, ns, As, w0, wa, mnu``: a flat
+    ``w0waCDM`` cosmology with the two dark-energy parameters free and
+    ``mnu`` the sum of neutrino masses in eV. Names and bounds are available
+    programmatically::
+
+        spec = theta_spec()
+        list(zip(spec.names, spec.bounds_array()))
 
     Returns
     -------
@@ -268,6 +276,10 @@ def data_vector_spec() -> DataVectorSpec:
     ``log`` is false on purpose: the emulated quantity is the ratio to the
     baseline, not a mass function, and it is neither positive-definite in
     general nor sensibly logged.
+
+    The data vector is the 425-entry flattening of the twelve blocks, one per
+    redshift with its own mass range; ``mass_slices()`` and ``data_slices()``
+    give the block layout.
     """
     return DataVectorSpec(name="hmf_ratio_rockstar_m200m", n_bins=N_BINS, log=False)
 

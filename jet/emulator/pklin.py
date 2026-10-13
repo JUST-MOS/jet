@@ -154,7 +154,12 @@ def theta_spec() -> ParameterSpec:
 
 
 def data_vector_spec() -> DataVectorSpec:
-    """Return the output specification of the bundled emulator."""
+    """Return the output specification of the bundled emulator.
+
+    The data vector is the flattened linear power spectrum ``P(k, z)``:
+    ``N_Z`` redshifts by ``N_K`` wavenumbers, row-major so that
+    ``value[j * n_k + i] == P(k_i, z_j)``; see the module docstring.
+    """
     return DataVectorSpec(name="pkcb_lin", n_bins=N_BINS, log=True)
 
 
