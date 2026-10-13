@@ -317,6 +317,15 @@ def cosmo_parameter_spec() -> ParameterSpec:
     follow. They share an input box by construction, so declaring it twice would
     only create a way for the two to drift apart.
 
+    The column order — which is also the order of any ``theta`` array every
+    bundled emulator accepts — is ``Omegab, Omegam, H0, ns, As, w0, wa, mnu``:
+    a flat ``w0waCDM`` cosmology with the two dark-energy parameters free and
+    ``mnu`` the sum of neutrino masses in eV. Names and bounds are available
+    programmatically::
+
+        spec = cosmo_parameter_spec()
+        list(zip(spec.names, spec.bounds_array()))
+
     Returns
     -------
     ParameterSpec

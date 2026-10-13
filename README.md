@@ -74,10 +74,18 @@ x_spec = ParameterSpec(
 )
 y_spec = DataVectorSpec("wp", n_bins=15, log=True)
 
-# X: (N, 3) raw parameters, y: (N, 15) raw statistics. Arbitrary points, not a grid.
+# X: (20, 3) parameters drawn inside the spec bounds, one column per parameter,
+# in x_spec order. y: (20, 15) statistics — placeholder noise here; replace it
+# with your own simulation output, one row per sample.
+rng = np.random.default_rng(0)
+X = np.column_stack([rng.uniform(*p.bounds, size=20) for p in x_spec])
+y = rng.normal(size=(20, y_spec.n_bins))
+
 emulator = Emulator(x_spec, y_spec, backend="gp", n_pca=8)
 emulator.fit(X, y)
 
+# X_new: same column order as X, one row per prediction point
+X_new = np.array([[0.05, 0.96, 12.8]])
 mean, std = emulator.predict(X_new)
 emulator.save("wp.gp.npz")
 ```
@@ -90,6 +98,33 @@ from jet.emulator import Emulator
 emulator = Emulator.load("wp.gp.npz")  # resolved against $JET_DATA_DIR
 emulator.verify(x_spec=x_spec)  # optional, catches a column reordering
 ```
+
+## Cosmological parameters
+
+Every bundled emulator (P(k), HMF, ...) is trained on the same flat
+**w0waCDM** cosmology with eight free parameters. The column order of any
+`theta` array is fixed and shared across models:
+
+| # | name | bounds | meaning |
+|---|------|--------|---------|
+| 0 | `Omegab` | (0.04, 0.06) | baryon density |
+| 1 | `Omegam` | (0.24, 0.40) | total matter density |
+| 2 | `H0` | (60.0, 80.0) | Hubble constant [km/s/Mpc] |
+| 3 | `ns` | (0.92, 1.00) | scalar spectral index |
+| 4 | `As` | (1.7e-9, 2.5e-9) | primordial amplitude (not A_s×10⁹) |
+| 5 | `w0` | (-1.3, -0.7) | dark-energy equation of state today |
+| 6 | `wa` | (-0.5, 0.5) | running of the equation of state |
+| 7 | `mnu` | (0.0, 0.3) | sum of neutrino masses [eV] |
+
+Don't memorise the table; read it from the spec, which is the single source
+of truth for names and bounds:
+
+```python
+from jet.emulator.hmf import theta_spec
+
+spec = theta_spec()
+print(spec.names)            # the 8 names, in column order
+print(spec.bounds_array())   # (8, 2) lower/upper bounds per column
 
 ## Derived parameters
 
