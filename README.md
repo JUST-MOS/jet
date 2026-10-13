@@ -108,7 +108,7 @@ Every bundled emulator (P(k), HMF, ...) is trained on the same flat
 | # | name | bounds | meaning |
 |---|------|--------|---------|
 | 0 | `Omegab` | (0.04, 0.06) | baryon density |
-| 1 | `Omegam` | (0.24, 0.40) | total matter density |
+| 1 | `Omegam` | (0.24, 0.40) | total matter density (not include neutrino) |
 | 2 | `H0` | (60.0, 80.0) | Hubble constant [km/s/Mpc] |
 | 3 | `ns` | (0.92, 1.00) | scalar spectral index |
 | 4 | `As` | (1.7e-9, 2.5e-9) | primordial amplitude (not A_s×10⁹) |
