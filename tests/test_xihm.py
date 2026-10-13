@@ -588,7 +588,10 @@ class TestXiHMEmulator(unittest.TestCase):
         """
         np.testing.assert_array_equal(z_grid(), np.asarray(Z_GRID))
         np.testing.assert_array_equal(lgden_grid(), np.asarray(LGDEN_GRID))
-        np.testing.assert_allclose(r_mid(), R_MID, rtol=0.0, atol=0.0)
+        # The bundle grid is produced through a slightly different float path
+        # than the module constant (geomspace vs 10**linspace rounding); only
+        # the last ULP differs, so compare at machine precision.
+        np.testing.assert_allclose(r_mid(), R_MID, rtol=1e-12, atol=0.0)
 
 
 class TestMissingBundleMessage(unittest.TestCase):
