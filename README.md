@@ -74,10 +74,18 @@ x_spec = ParameterSpec(
 )
 y_spec = DataVectorSpec("wp", n_bins=15, log=True)
 
-# X: (N, 3) raw parameters, y: (N, 15) raw statistics. Arbitrary points, not a grid.
+# X: (20, 3) parameters drawn inside the spec bounds, one column per parameter,
+# in x_spec order. y: (20, 15) statistics — placeholder noise here; replace it
+# with your own simulation output, one row per sample.
+rng = np.random.default_rng(0)
+X = np.column_stack([rng.uniform(*p.bounds, size=20) for p in x_spec])
+y = rng.normal(size=(20, y_spec.n_bins))
+
 emulator = Emulator(x_spec, y_spec, backend="gp", n_pca=8)
 emulator.fit(X, y)
 
+# X_new: same column order as X, one row per prediction point
+X_new = np.array([[0.05, 0.96, 12.8]])
 mean, std = emulator.predict(X_new)
 emulator.save("wp.gp.npz")
 ```
