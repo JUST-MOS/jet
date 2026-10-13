@@ -141,9 +141,9 @@ def z_grid() -> np.ndarray:
 def theta_spec() -> ParameterSpec:
     """Return the input specification of the bundled emulator.
 
-    The bounds are the region the emulator was trained on. ``As`` is the
-    physical primordial amplitude; the reference file stores it multiplied by
-    ``1e9``, which the builder script converts.
+    The eight parameters and their
+    column order are the ones every bundled model shares; see
+    :func:`jet.cosmology.cosmo_parameter_spec`.
 
     Returns
     -------
