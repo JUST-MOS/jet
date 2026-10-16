@@ -183,7 +183,13 @@ def lgden_grid() -> np.ndarray:
 
 
 def theta_spec() -> ParameterSpec:
-    """Return the input specification of the bundled emulator."""
+    """Return the input specification of the bundled emulator.
+
+    The same eight cosmological parameters as every other bundled model,
+    declared once in :func:`jet.cosmology.cosmo_parameter_spec`. The column
+    order is that function's, and is also the order of any ``theta`` array
+    this module accepts.
+    """
     return cosmo_parameter_spec()
 
 

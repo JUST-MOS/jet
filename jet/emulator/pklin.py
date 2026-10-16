@@ -141,9 +141,9 @@ def z_grid() -> np.ndarray:
 def theta_spec() -> ParameterSpec:
     """Return the input specification of the bundled emulator.
 
-    The bounds are the region the emulator was trained on. ``As`` is the
-    physical primordial amplitude; the reference file stores it multiplied by
-    ``1e9``, which the builder script converts.
+    The eight parameters and their
+    column order are the ones every bundled model shares; see
+    :func:`jet.cosmology.cosmo_parameter_spec`.
 
     Returns
     -------
@@ -154,7 +154,12 @@ def theta_spec() -> ParameterSpec:
 
 
 def data_vector_spec() -> DataVectorSpec:
-    """Return the output specification of the bundled emulator."""
+    """Return the output specification of the bundled emulator.
+
+    The data vector is the flattened linear power spectrum ``P(k, z)``:
+    ``N_Z`` redshifts by ``N_K`` wavenumbers, row-major so that
+    ``value[j * n_k + i] == P(k_i, z_j)``; see the module docstring.
+    """
     return DataVectorSpec(name="pkcb_lin", n_bins=N_BINS, log=True)
 
 

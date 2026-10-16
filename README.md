@@ -58,90 +58,45 @@ Or straight from GitHub:
 pip install git+https://github.com/JUST-MOS/jet.git@<tag>
 ```
 
+## Cosmological parameters
+
+Every bundled emulator (P(k), HMF, ...) is trained on the same flat
+**w0waCDM** cosmology with eight free parameters. The column order of any
+`theta` array is fixed and shared across models:
+
+| # | name | bounds | meaning |
+|---|------|--------|---------|
+| 0 | `Omegab` | (0.04, 0.06) | baryon density |
+| 1 | `Omegam` | (0.24, 0.40) | total matter density (not include neutrino) |
+| 2 | `H0` | (60.0, 80.0) | Hubble constant [km/s/Mpc] |
+| 3 | `ns` | (0.92, 1.00) | scalar spectral index |
+| 4 | `As` | (1.7e-9, 2.5e-9) | primordial amplitude (not A_s×10⁹) |
+| 5 | `w0` | (-1.3, -0.7) | dark-energy equation of state today |
+| 6 | `wa` | (-0.5, 0.5) | running of the equation of state |
+| 7 | `mnu` | (0.0, 0.3) | sum of neutrino masses [eV] |
+
+Don't memorise the table; read it from the spec, which is the single source
+of truth for names and bounds:
+
+```python
+from jet.emulator.hmf import theta_spec
+
+spec = theta_spec()
+print(spec.names)  # the 8 names, in column order
+print(spec.bounds_array())  # (8, 2) lower/upper bounds per column
+```
+
 ## Quickstart
 
-```python
-import numpy as np
-from jet.spec import ParameterSpec, Param, DataVectorSpec
-from jet.emulator import Emulator
-
-x_spec = ParameterSpec(
-    [
-        Param("Omegab", bounds=(0.04, 0.06), block="cosmo"),
-        Param("ns", bounds=(0.92, 1.00), block="cosmo"),
-        Param("logMcut", bounds=(12.0, 13.8), block="hod"),
-    ]
-)
-y_spec = DataVectorSpec("wp", n_bins=15, log=True)
-
-# X: (N, 3) raw parameters, y: (N, 15) raw statistics. Arbitrary points, not a grid.
-emulator = Emulator(x_spec, y_spec, backend="gp", n_pca=8)
-emulator.fit(X, y)
-
-mean, std = emulator.predict(X_new)
-emulator.save("wp.gp.npz")
-```
-
-Loading needs neither scikit-learn nor PyTorch:
-
-```python
-from jet.emulator import Emulator
-
-emulator = Emulator.load("wp.gp.npz")  # resolved against $JET_DATA_DIR
-emulator.verify(x_spec=x_spec)  # optional, catches a column reordering
-```
-
-## Derived parameters
-
-A parameter that is a function of the others is not a new axis, and `jet` does
-not treat it as one. Declaring it on the spec adds no column — it lets the same
-spec be *addressed* along either parameter, converting at the boundary:
-
-```python
-from jet.derived import Sigma8FromAs
-
-x_spec = ParameterSpec(
-    [
-        Param("Omegab", ...),
-        Param("Omegam", ...),
-        Param("H0", ...),
-        Param("ns", ...),
-        Param("As", bounds=(1.7e-9, 2.5e-9)),
-        Param("w0", ...),
-        Param("wa", ...),
-        Param("mnu", ...),
-    ],
-    derived=[Sigma8FromAs()],  # sigma8 <-> As
-)
-
-emulator = Emulator(x_spec, y_spec).fit(X, y)  # trained on As, as the table has it
-emulator.predict(X_new)  # X_new is in As
-
-frame = emulator.x_spec.frame("sigma8")
-emulator.predict(frame.to_base(X_sigma8))  # driven by sigma8 instead
-```
-
-`X` keeps its `(n_samples, x_spec.dim)` shape in either frame, and the two
-agree to the accuracy of the conversion. `Sigma8FromAs` evaluates `sigma8`
-through `jet`'s bundled linear-theory `P(k)` emulator and inverts with the same
-fixed point `csstemu` uses; see [Derived parameters](jet/derived.py) and
-[the bundled data](jet/data/README.md).
-
-The conversion is applied by **you**, not by the model: an emulator reads the
-axes of its spec and nothing else. That keeps a parameter array to a single
-reading at the point it is consumed, and it means a bundle is bound to the axes
-alone — declaring or removing a derived parameter never invalidates one. A
-loaded model still carries its declarations, so `emulator.x_spec.derived_names`
-tells you which frames are available.
-
 > [!NOTE]
-> The bundled weights are not part of the distribution. A wheel or a fresh
-> clone has no `jet/data/pklin.gp.npz`, so `Sigma8FromAs` raises
-> `FileNotFoundError` explaining how to obtain it. Generate it with
-> `python tools/build_pklin_bundle.py`, or point `$JET_DATA_DIR` at a copy.
-> Everything else works without it — `Omegam` needs no data at all.
+> The trained weights for the emulators below are not shipped with the
+> package. They are fetched automatically on first use: simply load the
+> corresponding emulator on a machine with internet access (e.g. a login
+> node), and the bundle is downloaded from the project's GitHub Release
+> and cached locally. Alternatively, download the released `.npz` files
+> manually and point `JET_DATA_DIR` at a directory containing them.
 
-## Halo mass function
+### Halo mass function
 
 `HMFEmulator` predicts the cumulative halo abundance `n(>= M)` and its
 derivative `dn/dlnM`, in the `RockstarM200m` mass definition, over the same
@@ -150,6 +105,8 @@ eight cosmological parameters:
 ```python
 from jet.emulator.hmf import HMFEmulator
 
+## Omegab, Omegacb, H0, ns, As, w0, wa, mnu
+theta = [0.049, 0.31, 67.66, 0.9665, 2.1e-9, -1.0, 0.0, 0.06]
 hmf = HMFEmulator.load()
 n = hmf.number_density(theta, z=[0.0, 1.0, 3.0], M=[1e12, 1e13, 1e14])  # (1, 3, 3)
 d = hmf.dndlnM(theta, z=0.5, M=1e13)
@@ -174,12 +131,34 @@ Two things distinguish this model from the power spectrum:
 See [`examples/hmf.ipynb`](examples/hmf.ipynb) for a runnable walkthrough of the
 whole interface.
 
-> [!NOTE]
-> `jet/data/hmf_rockstar_m200m.gp.npz` is not tracked either. Generate it with
-> `python tools/build_hmf_bundle.py`. The baseline's physics works without it;
-> only the emulated part raises.
+### Transformation between sigma8 to As
 
-## Halo mass function with baryonic feedback
+> [!NOTE]
+> The emulator only accepts the trainned parameter set. If
+> you want use sigma8 instead of As, use the following script
+> to transfer sigma8 to As and input `theta_as` into the hmf emulator.
+
+```python
+import numpy as np
+from jet.cosmology import cosmo_parameter_spec
+from jet.derived import Sigma8FromAs
+from jet.spec import ParameterSpec
+
+# The spec the bundled emulators use, plus sigma8 as an alternative name for As.
+spec = ParameterSpec(list(cosmo_parameter_spec()), derived=[Sigma8FromAs()])
+frame = spec.frame("sigma8")
+
+# columns: Omegab, Omegam, H0, ns, sigma8, w0, wa, mnu
+# Note Omegam only contains the cold dark matter and baryon contributions, not neutrinos.
+theta_sigma8 = np.array([[0.049, 0.31, 67.66, 0.9665, 0.81, -1.0, 0.0, 0.06]])
+
+theta_as = frame.to_base(theta_sigma8)
+theta_as[0, 4]  # array(2.0845e-09)
+print(theta_as)
+theta = frame.from_base(theta_as)  # back to 0.81
+```
+
+### Halo mass function with baryonic feedback
 
 `BCMHFEmulator` predicts the cumulative abundance with the baryon correction
 model of Arico et al., over four **feedback parameters and no cosmological
@@ -188,9 +167,11 @@ ones**:
 ```python
 from jet.emulator.hmf_bcm import BCMHFEmulator, PARAMETER_DEFAULTS, mass_grid
 
+## logMc, thej, mu, delta
+theta_default = [15, 1.5, 3.5, 4.5]
 emu = BCMHFEmulator.load()
-n = emu.cumulative(PARAMETER_DEFAULTS[None, :])  # (1, 46) in (h/Mpc)^3
-d = emu.dndlgM(PARAMETER_DEFAULTS[None, :])  # dn/dlog10(M)
+n = emu.cumulative(theta_default[None, :])  # (1, 46) in (h/Mpc)^3
+d = emu.dndlgM(theta_default[None, :])  # dn/dlog10(M)
 M = mass_grid()  # the 46 masses, in Msun/h — the grid travels in the bundle
 ```
 
@@ -213,11 +194,7 @@ Three things set it apart from the model above:
 See [`examples/hmf_bcm_example.py`](examples/hmf_bcm_example.py) for a runnable
 walkthrough.
 
-> [!NOTE]
-> `jet/data/hmf_bcm_m200m.gp.npz` is not tracked either. Generate it with
-> `python tools/build_hmf_bcm_bundle.py`.
-
-## Halo-matter correlation function
+### Halo-matter correlation function
 
 `XiHMEmulator` predicts the cross-correlation between a halo sample and the
 matter field, over the same eight cosmological parameters. The sample can be
@@ -226,6 +203,8 @@ selected either by cumulative number density or by mass:
 ```python
 from jet.emulator.xihm import XiHMEmulator
 
+## Omegab, Omegacb, H0, ns, As, w0, wa, mnu
+theta = [0.049, 0.31, 67.66, 0.9665, 2.1e-9, -1.0, 0.0, 0.06]
 emu = XiHMEmulator.load()
 z, r = [0.0, 0.5, 1.5], np.logspace(-1.0, 1.5, 12)
 
@@ -270,38 +249,6 @@ what needs it.
 
 See [`examples/xihm_example.py`](examples/xihm_example.py) for a runnable
 walkthrough.
-
-> [!NOTE]
-> `jet/data/xihm_brhm_rockstar_m200m.gp.npz` and `jet/data/bhm_rockstar_m200m.gp.npz`
-> are not tracked either. Generate both with `python tools/build_xihm_bundle.py`.
-> The box layout and the interpolation work without them; only prediction raises.
-
-## Weight files
-
-Trained models are tens of megabytes and are retrained often, so they are not
-kept in the repository. `Emulator.load` accepts either an absolute path or a
-bare name, in which case it is looked up under `$JET_DATA_DIR`:
-
-```bash
-export JET_DATA_DIR=/share/users/<you>/jet-weights
-```
-
-### Fetching from GitHub Release
-
-Since v0.1.0 the weights are also attached to the GitHub Release of each
-version, so a plain `pip install` needs no environment configuration: the first
-`Emulator.load("<name>.npz")` fetches the file from the release into the user
-cache (`$XDG_CACHE_HOME/jet/data`, defaulting to `~/.cache/jet/data`), and
-every later call reads the cache. The fetch lives in
-`jet.emulator.resolve_weights_path`; disable it with `JET_NO_AUTO_FETCH`, pin a
-release with `JET_RELEASE_TAG`, and point a private repository's token via
-`GITHUB_TOKEN` / `JET_DATA_TOKEN`.
-
-Publish the current weights with:
-
-```bash
-python tools/publish_data.py          # uploads jet/data/*.npz to the VERSION tag
-```
 
 ## Repository layout
 
@@ -355,6 +302,128 @@ If you are the user of Gravity cluster, you can use
 source gravity-user.sh
 ```
 to load my conda env and setup the path of trained data file for a quick usage.
+
+## For development
+
+This section targets advanced users who intend to train their own emulators
+instead of consuming the pretrained bundles. **If you just want to run an
+existing emulator, skip this entire section.**
+
+### Train your own emulator in jet
+
+> [!WARNING]
+> The snippet below is **illustrative pseudo-code**, not a runnable script.
+> If you actually want to train your own emulator, read the module docstrings
+> of `jet.emulator` and the reference builder scripts under `tools/` carefully
+> first. Getting the data-vector layout, the transform chain, or the bundle
+> format wrong does not raise an error — it silently produces an emulator
+> that looks fine but predicts garbage.
+
+```python
+import numpy as np
+from jet.spec import ParameterSpec, Param, DataVectorSpec
+from jet.emulator import Emulator
+
+# 1. Declare your specs. The column order of X below must match x_spec
+#    exactly; the transform chain (e.g. log) is derived from y_spec.log,
+#    so getting either wrong is a silent failure.
+x_spec = ParameterSpec([...])  # <- your input parameters
+y_spec = DataVectorSpec("my_stat", n_bins=..., log=True)  # <- your data vector
+
+# 2. Your own training set: (n_samples, n_params) and (n_samples, n_bins).
+X, y = load_my_training_data()  # <- you must provide this
+
+# 3. Build, fit, save. The saved .npz is later picked up by Emulator.load().
+emu = Emulator(x_spec, y_spec, backend="gp", n_pca=8)
+emu.fit(X, y)
+emu.save("my_emulator.npz")
+```
+
+Loading needs neither scikit-learn nor PyTorch:
+
+```python
+from jet.emulator import Emulator
+
+emulator = Emulator.load("wp.gp.npz")  # resolved against $JET_DATA_DIR
+emulator.verify(x_spec=x_spec)  # optional, catches a column reordering
+```
+
+### Derived parameters
+
+A parameter that is a function of the others is not a new axis, and `jet` does
+not treat it as one. Declaring it on the spec adds no column — it lets the same
+spec be *addressed* along either parameter, converting at the boundary:
+
+```python
+from jet.derived import Sigma8FromAs
+
+x_spec = ParameterSpec(
+    [
+        Param("Omegab", ...),
+        Param("Omegam", ...),
+        Param("H0", ...),
+        Param("ns", ...),
+        Param("As", bounds=(1.7e-9, 2.5e-9)),
+        Param("w0", ...),
+        Param("wa", ...),
+        Param("mnu", ...),
+    ],
+    derived=[Sigma8FromAs()],  # sigma8 <-> As
+)
+
+emulator = Emulator(x_spec, y_spec).fit(X, y)  # trained on As, as the table has it
+emulator.predict(X_new)  # X_new is in As
+
+frame = emulator.x_spec.frame("sigma8")
+emulator.predict(frame.to_base(X_sigma8))  # driven by sigma8 instead
+```
+
+`X` keeps its `(n_samples, x_spec.dim)` shape in either frame, and the two
+agree to the accuracy of the conversion. `Sigma8FromAs` evaluates `sigma8`
+through `jet`'s bundled linear-theory `P(k)` emulator and inverts with the same
+fixed point `csstemu` uses; see [Derived parameters](jet/derived.py) and
+[the bundled data](jet/data/README.md).
+
+The conversion is applied by **you**, not by the model: an emulator reads the
+axes of its spec and nothing else. That keeps a parameter array to a single
+reading at the point it is consumed, and it means a bundle is bound to the axes
+alone — declaring or removing a derived parameter never invalidates one. A
+loaded model still carries its declarations, so `emulator.x_spec.derived_names`
+tells you which frames are available.
+
+> [!NOTE]
+> The bundled weights are not part of the distribution. A wheel or a fresh
+> clone has no `jet/data/pklin.gp.npz`, so `Sigma8FromAs` raises
+> `FileNotFoundError` explaining how to obtain it. Generate it with
+> `python tools/build_pklin_bundle.py`, or point `$JET_DATA_DIR` at a copy.
+> Everything else works without it — `Omegam` needs no data at all.
+
+### Weight files
+
+Trained models are tens of megabytes and are retrained often, so they are not
+kept in the repository. `Emulator.load` accepts either an absolute path or a
+bare name, in which case it is looked up under `$JET_DATA_DIR`:
+
+```bash
+export JET_DATA_DIR=/share/users/<you>/jet-weights
+```
+
+### Fetching from GitHub Release
+
+Since v0.1.0 the weights are also attached to the GitHub Release of each
+version, so a plain `pip install` needs no environment configuration: the first
+`Emulator.load("<name>.npz")` fetches the file from the release into the user
+cache (`$XDG_CACHE_HOME/jet/data`, defaulting to `~/.cache/jet/data`), and
+every later call reads the cache. The fetch lives in
+`jet.emulator.resolve_weights_path`; disable it with `JET_NO_AUTO_FETCH`, pin a
+release with `JET_RELEASE_TAG`, and point a private repository's token via
+`GITHUB_TOKEN` / `JET_DATA_TOKEN`.
+
+Publish the current weights with:
+
+```bash
+python tools/publish_data.py          # uploads jet/data/*.npz to the VERSION tag
+```
 
 ## Version management
 

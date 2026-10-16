@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 .eggs/
+.ipynb_checkpoints*
 
 # Testing
 .pytest_cache/
@@ -18,7 +19,6 @@ htmlcov/
 # at runtime through $JET_DATA_DIR rather than committed; see AGENTS.md.
 *.npz
 weights/
-tools/git-commit.sh
 
 # Data files bundled with the package. They are reproduced by a script in
 # tools/, are a few megabytes, and are not jet's to redistribute; only the
