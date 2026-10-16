@@ -131,7 +131,12 @@ Two things distinguish this model from the power spectrum:
 See [`examples/hmf.ipynb`](examples/hmf.ipynb) for a runnable walkthrough of the
 whole interface.
 
-### Transfer As to sigma8
+### Transformation between sigma8 to As
+
+> [!NOTE]
+> The emulator only accepts the trainned parameter set. If
+> you want use sigma8 instead of As, use the following script
+> to transfer sigma8 to As and input `theta_as` into the hmf emulator.
 
 ```python
 import numpy as np
