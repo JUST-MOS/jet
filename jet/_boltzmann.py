@@ -13,6 +13,11 @@ The two spectra are deliberately different:
 Both use ``k`` in :math:`h/\mathrm{Mpc}` and ``P(k)`` in
 :math:`(\mathrm{Mpc}/h)^3`, with the same massive-neutrino and ``w0wa``
 treatment as the reference.
+
+Massive neutrinos use the reference's ``Nncdm = 1`` convention: one massive
+species when ``mnu > 0`` and no massive species otherwise. This matches the
+bundled Pcb/ratio emulators; the degenerate three-species split is not
+implemented here.
 """
 
 from __future__ import annotations

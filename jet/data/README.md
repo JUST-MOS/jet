@@ -13,6 +13,10 @@ used by the halo mass function, halo bias and correlation function, and the
 first factor of the total-matter spectrum that backs the `sigma8` derived
 parameter (see `jet.emulator.pkmm` and `jet.derived.Sigma8FromAs`).
 
+The training set uses `Nncdm = 1`: one massive neutrino species when `mnu > 0`,
+massless neutrinos otherwise. The degenerate three-species split is not
+represented by this bundle.
+
 It predicts `P(k, z)` in `(Mpc/h)^3` on a flattened grid of 12 redshifts
 (`jet.emulator.pklin.Z_GRID`, ascending, `z = 0` first) by 1000 wavenumbers.
 The wavenumber grid travels inside the same file, as an `extra` array, so
@@ -39,7 +43,8 @@ for `mnu > 0` (and `P_mm = P_cb` otherwise). The total spectrum is what
 halo bias and correlation function continue to use `P_cb`.
 
 The reference removes its one `mnu = 0` training cosmology, leaving 512 rows
-and 10 PCA components. Regenerate with
+and 10 PCA components. Like the Pcb bundle, it uses the `Nncdm = 1`
+convention for `mnu > 0`; `mnu = 0` is handled analytically. Regenerate with
 `tools/build_pknn_ratio_bundle.py`; it verifies total-matter sigma8 against the
 reference implementation when that is importable.
 

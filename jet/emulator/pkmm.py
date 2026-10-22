@@ -21,6 +21,12 @@ For ``mnu = 0`` the ratio is not needed and :math:`P_{mm} = P_{cb}` exactly.
 The halo mass function and the bias/correlation-function models continue to use
 :math:`P_{cb}`; only ``Sigma8FromAs`` and ``spectral_equivalence_as`` consume
 the total-matter spectrum.
+
+Both the Pcb emulator and the ratio emulator assume the reference's
+``Nncdm = 1`` massive-neutrino convention: one massive species when ``mnu > 0``,
+massless neutrinos otherwise. The ratio bundle has no ``mnu = 0`` training row,
+and ``mnu = 0`` is handled analytically by returning Pcb. The degenerate
+three-species split is not supported by this composition.
 """
 
 from __future__ import annotations

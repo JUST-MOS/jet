@@ -17,18 +17,22 @@ emulator. The numerical conventions are deliberately the reference ones:
   the bounded box ``w0 in [-1.3, -0.7]``, ``wa in [-0.5, 0.5]``;
 * the amplitude is rescaled as ``As_eq = As * (sigma8_target / sigma8_eq)**2``.
 
-Two behaviours of the reference are intentionally preserved:
+Two behaviours are important to keep in mind:
 
 1. The ``w0waCDM`` problem is underdetermined: one distance constraint with
    two parameters leaves a one-dimensional solution curve, so the returned
    ``(w0, wa)`` depends on the optimizer path. Do not expect a different
    solver to return the same point on that curve.
-2. In the normal amplitude path the target total-matter :math:`\\sigma_8`
-   comes from CLASS or CAMB while the auxiliary model's :math:`\\sigma_8`
-   comes from the total-matter emulator composition. When the auxiliary
-   parameters leave the emulator box, the default is to raise; opt into CAMB
-   with ``fallback_to_camb=True``. The reference's mixed-backend behaviour is
-   available through that option.
+2. ``sigma8_type`` controls the **entire** amplitude calculation, not just the
+   target. ``"emulator"`` (the default) uses the total-matter emulator for
+   both the target and the auxiliary model, with a per-side CAMB fallback when
+   that side leaves the emulator box (``fallback_to_camb=True`` by default).
+   ``"class"`` and ``"camb"`` use that Boltzmann backend for both sides. There
+   is no mixed target/auxiliary backend default.
+
+The emulator and CAMB comparisons assume the reference's ``Nncdm = 1``
+massive-neutrino convention: one massive species when ``mnu > 0`` and massless
+neutrinos otherwise. The degenerate three-species split is not supported here.
 
 Parameters are passed as an eight-column ``theta`` array in the order of
 :func:`jet.cosmology.cosmo_parameter_spec`::
@@ -482,6 +486,104 @@ def _warn_auxiliary_fallback(
     )
 
 
+def _emulator_spec(emulator: Emulator | None):
+    """Return the bounds spec of the Pcb emulator without loading it."""
+    if emulator is not None:
+        return emulator.x_spec
+    return pklin_theta_spec()
+
+
+def _warn_target_fallback(theta: np.ndarray, mask: np.ndarray, spec) -> None:
+    """Warn that CAMB is supplying the target sigma8 for masked samples."""
+    violations = spec.check_within_bounds(theta[mask], slack=0.0)
+    original_rows = np.flatnonzero(mask)
+    details = []
+    for param_name, row, value in violations:
+        sample = int(original_rows[row])
+        low, high = spec.params[spec.index(param_name)].bounds  # type: ignore[misc]
+        details.append(f"sample {sample}: {param_name}={value:.6g} outside [{low:.6g}, {high:.6g}]")
+    warnings.warn(
+        "spectral_equivalence_as: target parameters leave the emulator's "
+        "training box; using CAMB sigma8:\n  " + "\n  ".join(details),
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _sigma8_class_camb_rows(
+    rows: np.ndarray,
+    z_rows: np.ndarray,
+    sigma8_type: str,
+) -> np.ndarray:
+    """Evaluate CLASS/CAMB sigma8 for one ``(row, z)`` pair per call.
+
+    The auxiliary model changes with redshift, so each flat row is a distinct
+    cosmology and gets its own Boltzmann run. This is the expensive path; the
+    emulator mode reuses one provider for the whole batch.
+    """
+    rows = np.atleast_2d(np.asarray(rows, dtype=float))
+    z_rows = np.atleast_1d(np.asarray(z_rows, dtype=float))
+    if rows.shape[0] != z_rows.size:
+        raise ValueError(f"rows has {rows.shape[0]} entries but z has {z_rows.size}")
+    function = _sigma8_class if sigma8_type == "class" else _sigma8_camb
+    out = np.empty(z_rows.size, dtype=float)
+    for index in range(z_rows.size):
+        out[index] = float(function(rows[index], np.array([z_rows[index]]))[0])
+    return out
+
+
+def _sigma8_emulator_target(
+    theta: np.ndarray,
+    z: np.ndarray,
+    fallback_to_camb: bool,
+    emulator: Emulator | None,
+    ratio_emulator: Emulator | None,
+) -> np.ndarray:
+    """Target total-matter sigma8 for every sample, with per-side fallback."""
+    spec = _emulator_spec(emulator)
+    outside = _outside_bounds(theta, spec.bounds_array())
+    if np.any(outside) and not fallback_to_camb:
+        spec.require_within_bounds(theta, name="target theta")
+
+    out = np.empty((theta.shape[0], z.size), dtype=float)
+    inside = ~outside
+    if np.any(inside):
+        provider = _resolved_pkmm(emulator, ratio_emulator)
+        for index in np.flatnonzero(inside):
+            out[index] = _sigma8_emulator(theta[index : index + 1], z, provider)
+    if np.any(outside):
+        _warn_target_fallback(theta, outside, spec)
+        for index in np.flatnonzero(outside):
+            out[index] = _sigma8_camb(theta[index], z)
+    return out
+
+
+def _sigma8_emulator_aux(
+    theta: np.ndarray,
+    z_flat: np.ndarray,
+    fallback_to_camb: bool,
+    emulator: Emulator | None,
+    ratio_emulator: Emulator | None,
+    n_z: int,
+) -> np.ndarray:
+    """Auxiliary total-matter sigma8 per flat row, with per-side fallback."""
+    spec = _emulator_spec(emulator)
+    outside = _outside_bounds(theta, spec.bounds_array())
+    if np.any(outside) and not fallback_to_camb:
+        spec.require_within_bounds(theta, name="auxiliary theta")
+
+    out = np.empty(theta.shape[0], dtype=float)
+    inside = ~outside
+    if np.any(inside):
+        provider = _resolved_pkmm(emulator, ratio_emulator)
+        out[inside] = _sigma8_emulator(theta[inside], z_flat[inside], provider)
+    if np.any(outside):
+        _warn_auxiliary_fallback(theta, outside, spec, z_flat, n_z)
+        for index in np.flatnonzero(outside):
+            out[index] = _sigma8_camb(theta[index], np.array([z_flat[index]]))[0]
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -626,8 +728,8 @@ def spectral_equivalence_as(
     w0_eq,
     wa_eq=None,
     *,
-    sigma8_type: str = "class",
-    fallback_to_camb: bool = False,
+    sigma8_type: str = "emulator",
+    fallback_to_camb: bool = True,
     emulator: Emulator | None = None,
     ratio_emulator: Emulator | None = None,
 ) -> np.ndarray:
@@ -654,25 +756,42 @@ def spectral_equivalence_as(
         Auxiliary dark-energy parameters. For a single input sample a
         one-dimensional array of length ``n_z`` is accepted; for ``n > 1`` the
         shape must be ``(n, n_z)``. ``wa_eq=None`` means zero.
-    sigma8_type : {"class", "camb", "emulator"}, optional
-        Backend for the **target** total-matter sigma8. ``"class"`` and
-        ``"camb"`` accept an original model outside the emulator box because
-        the target comes from the Boltzmann code. The auxiliary sigma8 comes
-        from the total-matter emulator when the auxiliary parameters lie inside
-        its training box; if they do not, the default is to raise, and
-        ``fallback_to_camb=True`` switches to CAMB. ``"emulator"`` uses the
-        emulator for both the target and the auxiliary value and **always**
-        raises when either is outside the box, regardless of
-        ``fallback_to_camb``.
+    sigma8_type : {"emulator", "class", "camb"}, optional
+        Backend for the **entire** sigma8 calculation, i.e. both the target and
+        the auxiliary model:
+
+        ``"emulator"`` (default)
+            Both sides use the bundled total-matter emulator. A side outside
+            the emulator's parameter bounds falls back to CAMB when
+            ``fallback_to_camb=True``; otherwise it raises ``ValueError``.
+            The fallback is per side, so a target outside the box does not
+            force an in-box auxiliary to CAMB (and vice versa).
+        ``"class"``
+            Both sides use CLASS's total-matter sigma8. No emulator bounds are
+            involved and ``fallback_to_camb`` is ignored.
+        ``"camb"``
+            Both sides use CAMB's total-matter sigma8 (``delta_tot``). No
+            emulator bounds are involved and ``fallback_to_camb`` is ignored.
+
+        This replaces the previous mixed semantics where ``sigma8_type`` only
+        selected the target backend.
     fallback_to_camb : bool, optional
-        Whether an auxiliary model outside the emulator box may use CAMB for
-        its sigma8. Only affects ``sigma8_type="class"`` and ``"camb"``.
+        Whether an emulator-side sigma8 outside the box may use CAMB. Only
+        affects ``sigma8_type="emulator"``. Defaults to true.
     emulator : jet.emulator.Emulator, optional
         :math:`P_{cb}(k)` emulator, the first factor of the total-matter
-        composition. ``None`` loads the bundled one.
-    ratio_emulator : jet.emulator.Emulator, optional
-        :math:`P_{nn}/P_{cb}` ratio emulator, the second factor. ``None`` loads
+        composition. Only used by ``sigma8_type="emulator"``. ``None`` loads
         the bundled one.
+    ratio_emulator : jet.emulator.Emulator, optional
+        :math:`P_{nn}/P_{cb}` ratio emulator, the second factor. Only used by
+        ``sigma8_type="emulator"``. ``None`` loads the bundled one.
+
+    Notes
+    -----
+    The emulator path assumes the reference's ``Nncdm = 1`` massive-neutrino
+    convention (one massive species when ``mnu > 0``, massless otherwise). The
+    CLASS and CAMB helpers use the same convention. The degenerate
+    three-species split is not supported by this comparison.
 
     Returns
     -------
@@ -682,20 +801,6 @@ def spectral_equivalence_as(
     theta_values = _validate_theta(theta)
     z_values = _validate_z(z)
     sigma8_type = _normalise_sigma8_type(sigma8_type)
-
-    # The bounds live in the shared cosmological spec, so the emulator bundle
-    # is only needed when an auxiliary sigma8 actually comes from it.
-    provider = None
-    if sigma8_type == "emulator":
-        provider = _resolved_pkmm(emulator, ratio_emulator)
-        # The target sigma8 is evaluated by the emulator, so the original
-        # samples must be inside its box.
-        provider.x_spec.require_within_bounds(theta_values, name="theta")
-        bounds = provider.x_spec.bounds_array()
-    elif emulator is not None:
-        bounds = emulator.x_spec.bounds_array()
-    else:
-        bounds = pklin_theta_spec().bounds_array()
 
     n_samples, n_z = theta_values.shape[0], z_values.size
 
@@ -732,9 +837,18 @@ def spectral_equivalence_as(
             raise ValueError("wa_eq must be finite")
 
     # Target sigma8 of the original model.
-    sigma8_target = np.empty((n_samples, n_z), dtype=float)
-    for index, row in enumerate(theta_values):
-        sigma8_target[index] = _target_sigma8(row, z_values, sigma8_type, provider)
+    if sigma8_type == "emulator":
+        sigma8_target = _sigma8_emulator_target(
+            theta_values,
+            z_values,
+            fallback_to_camb,
+            emulator,
+            ratio_emulator,
+        )
+    else:
+        sigma8_target = np.empty((n_samples, n_z), dtype=float)
+        for index, row in enumerate(theta_values):
+            sigma8_target[index] = _target_sigma8(row, z_values, sigma8_type, None)
 
     # Auxiliary theta, flattened row-major as (sample, redshift).
     theta_eq = np.empty((n_samples, n_z, len(PARAMETER_NAMES)), dtype=float)
@@ -749,41 +863,17 @@ def spectral_equivalence_as(
     theta_eq_flat = theta_eq.reshape(n_samples * n_z, len(PARAMETER_NAMES))
     z_flat = np.tile(z_values, n_samples)
 
-    sigma8_aux = np.empty(n_samples * n_z, dtype=float)
-
-    # The reference uses the emulator whenever the auxiliary model is inside
-    # its design box. Outside the box the new default refuses to extrapolate;
-    # fallback_to_camb=True reproduces the reference's CAMB behaviour. The
-    # explicit "emulator" mode is a jet extension and always refuses.
-    outside = _outside_bounds(theta_eq_flat, bounds)
     if sigma8_type == "emulator":
-        if np.any(outside):
-            provider.x_spec.require_within_bounds(theta_eq_flat, name="auxiliary theta")
-        emulator_mask = np.ones(n_samples * n_z, dtype=bool)
-    else:
-        if np.any(outside) and not fallback_to_camb:
-            spec = emulator.x_spec if emulator is not None else pklin_theta_spec()
-            spec.require_within_bounds(theta_eq_flat, name="auxiliary theta")
-        emulator_mask = ~outside
-        if np.any(outside):
-            spec = emulator.x_spec if emulator is not None else pklin_theta_spec()
-            _warn_auxiliary_fallback(theta_eq_flat, outside, spec, z_flat, n_z)
-
-    if np.any(emulator_mask):
-        if provider is None:
-            provider = _resolved_pkmm(emulator, ratio_emulator)
-        sigma8_aux[emulator_mask] = _sigma8_emulator(
-            theta_eq_flat[emulator_mask],
-            z_flat[emulator_mask],
-            provider,
+        sigma8_aux = _sigma8_emulator_aux(
+            theta_eq_flat,
+            z_flat,
+            fallback_to_camb,
+            emulator,
+            ratio_emulator,
+            n_z,
         )
-
-    if np.any(~emulator_mask):
-        for flat_index in np.flatnonzero(~emulator_mask):
-            sigma8_aux[flat_index] = _sigma8_camb(
-                theta_eq_flat[flat_index],
-                np.array([z_flat[flat_index]]),
-            )[0]
+    else:
+        sigma8_aux = _sigma8_class_camb_rows(theta_eq_flat, z_flat, sigma8_type)
 
     sigma8_aux = sigma8_aux.reshape(n_samples, n_z)
     with np.errstate(divide="ignore", invalid="ignore"):

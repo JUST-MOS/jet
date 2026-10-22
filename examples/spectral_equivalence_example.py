@@ -7,9 +7,10 @@ The example has four parts:
    the emulator, so this is allowed;
 2. amplitude matching for a cosmology inside the training box, using the
    bundled total-matter P(k) emulator;
-3. the same call on an out-of-box cosmology, which now raises ``ValueError``
-   instead of silently extrapolating;
-4. the optional CAMB fallback for auxiliary models that leave the box.
+3. an out-of-box target, which raises with ``fallback_to_camb=False`` and
+   falls back to CAMB on the target side with the default
+   ``fallback_to_camb=True``;
+4. an out-of-box auxiliary model, which falls back only on the auxiliary side.
 
 Run with::
 
@@ -70,24 +71,40 @@ print("original As:        ", theta_in_box[4])
 
 print()
 print("=" * 72)
-print("3. Out-of-box input with sigma8_type='emulator'")
+print("3. Out-of-box target: emulator with per-side CAMB fallback")
 print("=" * 72)
 
+# The target is outside the box. With fallback disabled this is an error.
 try:
-    spectral_equivalence_as(theta_reference, z_reference, w0_eq, wa_eq, sigma8_type="emulator")
+    spectral_equivalence_as(
+        theta_reference,
+        z_reference,
+        w0_eq,
+        wa_eq,
+        sigma8_type="emulator",
+        fallback_to_camb=False,
+    )
 except ValueError as exc:
-    print("raised ValueError as expected:")
+    print("fallback_to_camb=False raises:")
     print(exc)
 
-# A cosmology whose *auxiliary* wCDM model also leaves the box. This is the
-# case where CAMB can rescue the amplitude matching if the caller opts in.
+try:
+    As_eq_default = spectral_equivalence_as(theta_reference, z_reference, w0_eq, wa_eq)
+except ImportError as exc:
+    print(f"\nCAMB fallback skipped: {exc}")
+else:
+    print("\ndefault (fallback_to_camb=True) gives:")
+    print("  equivalent As(z):", As_eq_default[0])
+
+# A cosmology whose *auxiliary* wCDM model leaves the box, while the original
+# model is inside it. The default fallback switches only the auxiliary side.
 theta_out_of_box = np.array([0.05, 0.32, 70.0, 0.96, 2.1e-09, -1.25, -0.5, 0.0])
 z_out_of_box = np.array([0.5, 1.0, 2.0])
 w_const_out_of_box = spectral_equivalence_de(theta_out_of_box, z_out_of_box, wcdm=True)
 
 print()
 print("=" * 72)
-print("4. Auxiliary model outside the box: CAMB fallback")
+print("4. Out-of-box auxiliary: per-side CAMB fallback")
 print("=" * 72)
 
 try:
@@ -95,10 +112,11 @@ try:
         theta_out_of_box,
         z_out_of_box,
         w_const_out_of_box,
-        sigma8_type="camb",
+        sigma8_type="emulator",
+        fallback_to_camb=False,
     )
 except ValueError as exc:
-    print("default (fallback_to_camb=False) raises:")
+    print("fallback_to_camb=False raises:")
     print(exc)
 
 try:
@@ -106,7 +124,7 @@ try:
         theta_out_of_box,
         z_out_of_box,
         w_const_out_of_box,
-        sigma8_type="camb",
+        sigma8_type="emulator",
         fallback_to_camb=True,
     )
 except ImportError as exc:

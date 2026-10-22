@@ -286,10 +286,13 @@ n = hmf.number_density(theta, z=z, M=M)
   (`delta_tot`) for out-of-range rows. `to_base` checks the input and the final
   solution; the iteration itself may explore intermediate amplitudes outside
   the box.
-- `spectral_equivalence_as(..., fallback_to_camb=True)` uses CAMB for an
-  auxiliary model outside the box. `sigma8_type="emulator"` is stricter: it
-  always raises when the original or auxiliary model is out of range, because
-  both sides of the ratio would be invalid.
+- `spectral_equivalence_as` defaults to `sigma8_type="emulator"` and
+  `fallback_to_camb=True`. Both the target and the auxiliary sigma8 use the
+  total-matter emulator; each side that leaves the box is replaced by CAMB,
+  with a `UserWarning`. Set `fallback_to_camb=False` to make either side raise
+  `ValueError` instead. `sigma8_type="class"` or `"camb"` uses that Boltzmann
+  backend for **both** sides, so there is no emulator box and
+  `fallback_to_camb` is ignored.
 
 `BhmEmulator`, `XiHMEmulator` and `BCMHFEmulator` never fall back: their
 emulated quantity has no analytic counterpart that preserves its meaning, so
@@ -313,7 +316,7 @@ z = np.array([0.5, 1.0, 2.0])
 
 w_const = spectral_equivalence_de(theta, z, wcdm=True)
 w0, wa, err = spectral_equivalence_de(theta, z, return_error=True)
-As_eq = spectral_equivalence_as(theta, z, w0, wa, sigma8_type="emulator")
+As_eq = spectral_equivalence_as(theta, z, w0, wa)
 ```
 
 `Omegam` is baryons plus cold dark matter, excluding massive neutrinos, and
@@ -321,13 +324,19 @@ As_eq = spectral_equivalence_as(theta, z, w0, wa, sigma8_type="emulator")
 row or a batch of rows and always keep the sample axis, returning `(1, n_z)` or
 `(n, n_z)`.
 
-The default `sigma8_type="class"` reproduces the reference's mixed behaviour:
-the target sigma8 comes from CLASS while the auxiliary model uses the bundled
-total-matter emulator, falling back to CAMB when the auxiliary parameters leave
-the emulator's training box. `sigma8_type="emulator"` is a jet extension that
-uses the emulator for both sides and needs no Boltzmann solver. See
-[`examples/equivalence_example.py`](examples/equivalence_example.py) for a
-runnable walkthrough.
+`sigma8_type` controls the **entire** sigma8 calculation, not just the target:
+
+- `"emulator"` (default) uses the bundled total-matter emulator for both the
+  target and the auxiliary model. Each side outside the emulator box falls back
+  to CAMB when `fallback_to_camb=True` (the default); set it to `False` to raise
+  instead. The fallback is per side.
+- `"class"` or `"camb"` uses that Boltzmann backend for both sides; no emulator
+  bounds are involved and `fallback_to_camb` is ignored.
+
+The emulator/CAMB comparison assumes the reference's `Nncdm = 1` massive
+neutrino convention (one massive species for `mnu > 0`, massless otherwise).
+See [`examples/spectral_equivalence_example.py`](examples/spectral_equivalence_example.py)
+for a runnable walkthrough.
 
 ## Repository layout
 

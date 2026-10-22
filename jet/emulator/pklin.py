@@ -14,7 +14,12 @@ and bundle format as everything else.
 
 The emulator predicts :math:`\\log_{10} P_{\\mathrm{cb,lin}}(k, z)` on a fixed
 grid: 12 redshifts from the reference file, and 1000 wavenumbers in
-:math:`h/\\mathrm{Mpc}`. Its data vector is that grid flattened, redshift first::
+:math:`h/\\mathrm{Mpc}`. It was trained on the reference's ``Nncdm = 1``
+cosmology set: one massive neutrino species when ``mnu > 0``, massless
+neutrinos otherwise. The degenerate three-species split is not represented by
+this bundle.
+
+Its data vector is that grid flattened, redshift first::
 
     value[j * n_k + i]  ==  P(k_i, z_j)        0 <= j < N_Z, 0 <= i < N_K
 
