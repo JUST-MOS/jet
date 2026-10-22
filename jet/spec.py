@@ -434,6 +434,66 @@ class ParameterSpec:
                 violations.append((param.name, int(row), float(values[row])))
         return violations
 
+    def require_within_bounds(
+        self,
+        X: np.ndarray,
+        slack: float = 0.0,
+        name: str = "input",
+    ) -> None:
+        """Raise :class:`ValueError` unless every sample is inside the bounds.
+
+        This is the strict counterpart of :meth:`check_within_bounds`: instead
+        of returning a diagnostic list, it refuses to let a caller extrapolate
+        silently. The message lists every violation, so a batch with several
+        bad parameters can be fixed in one pass.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, dim) or (dim,)
+            Sample points, columns in spec order. A single sample may be passed
+            as a one-dimensional array.
+        slack : float, optional
+            Tolerated fractional excursion beyond a bound, as in
+            :meth:`check_within_bounds`. Emulator wrappers use the default of
+            zero.
+        name : str, optional
+            Name used in the error message, e.g. ``"theta"``.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` has the wrong shape, contains non-finite values, or has
+            any sample outside the declared bounds.
+        """
+        values = np.asarray(X, dtype=float)
+        if values.ndim == 1:
+            values = values[None, :]
+        if values.ndim != 2 or values.shape[1] != self.dim:
+            raise ValueError(f"expected {name} with shape (N, {self.dim}), got {values.shape}")
+
+        finite = np.isfinite(values)
+        if not np.all(finite):
+            bad_rows, bad_columns = np.nonzero(~finite)
+            details = ", ".join(
+                f"row {row} {self.params[column].name}={values[row, column]!r}"
+                for row, column in zip(bad_rows, bad_columns, strict=True)
+            )
+            raise ValueError(f"{name} contains non-finite values: {details}")
+
+        violations = self.check_within_bounds(values, slack=slack)
+        if not violations:
+            return
+
+        multiple_rows = values.shape[0] > 1
+        details = []
+        for param_name, row, value in violations:
+            low, high = self.params[self.index(param_name)].bounds  # type: ignore[misc]
+            prefix = f"row {row}: " if multiple_rows else ""
+            details.append(f"{prefix}{param_name}={value:.6g} outside [{low:.6g}, {high:.6g}]")
+        raise ValueError(
+            f"{name} is outside the emulator's validity range:\n  " + "\n  ".join(details)
+        )
+
     # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------

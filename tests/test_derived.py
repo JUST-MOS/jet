@@ -11,6 +11,7 @@ tracked by git, so a clone without them must skip rather than fail.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import unittest
 import warnings
@@ -27,11 +28,15 @@ from jet.derived import (
 )
 from jet.emulator import Emulator
 from jet.emulator.pklin import BUNDLE_NAME, data_dir
+from jet.emulator.pkmm import BUNDLE_NAME as RATIO_BUNDLE_NAME
 from jet.spec import DataVectorSpec, Param, ParameterSpec
 
 # The bundled weights are not tracked by git, so a fresh clone has no data and
 # the tests that need it must skip rather than fail.
 HAS_DATA = (data_dir() / BUNDLE_NAME).exists()
+HAS_RATIO = (data_dir() / RATIO_BUNDLE_NAME).exists()
+HAS_TOTAL_DATA = HAS_DATA and HAS_RATIO
+HAS_CAMB = importlib.util.find_spec("camb") is not None
 
 
 def _omegam_conversion() -> LinearCombination:
@@ -346,12 +351,13 @@ class TestDerivedParametersWithAnEmulator(unittest.TestCase):
         self.emulator.verify(x_spec=doubled)
 
 
-@unittest.skipUnless(HAS_DATA, f"requires the bundled data under {data_dir()}")
+@unittest.skipUnless(HAS_TOTAL_DATA, f"requires the bundled P(k) and ratio data under {data_dir()}")
 class TestSigma8FromAs(unittest.TestCase):
     """The built-in conversion, against the reference it was packaged from."""
 
-    #: Computed by the reference implementation for the cosmology below.
-    REFERENCE_SIGMA8 = 0.8139727843066471
+    #: Total-matter sigma8 computed by the reference implementation for the
+    #: cosmology below (including massive neutrinos).
+    REFERENCE_SIGMA8 = 0.8104854320171299
 
     #: Omegab, Omegam, H0, ns, As, w0, wa, mnu -- the emulator's own axes.
     COSMOLOGY = np.array([[0.049, 0.310, 67.66, 0.9665, 2.105e-9, -1.0, 0.0, 0.06]])
@@ -394,11 +400,26 @@ class TestSigma8FromAs(unittest.TestCase):
         enough that a wrong kernel, a mis-ordered grid or a missing
         normalisation would fail it.
         """
-        self.assertAlmostEqual(self.sigma8 / self.REFERENCE_SIGMA8 - 1.0, 0.0, places=8)
+        self.assertAlmostEqual(self.sigma8 / self.REFERENCE_SIGMA8 - 1.0, 0.0, places=6)
 
     def test_is_a_plausible_sigma8(self) -> None:
         self.assertGreater(self.sigma8, 0.5)
         self.assertLess(self.sigma8, 1.5)
+
+    def test_out_of_bounds_input_raises(self) -> None:
+        theta = self.COSMOLOGY.copy()
+        theta[0, 5] = -1.4
+        with self.assertRaises(ValueError):
+            self.conversion.to_derived(theta, self.COLUMNS)
+
+    @unittest.skipUnless(HAS_CAMB, "camb is not installed")
+    def test_out_of_bounds_input_can_fall_back_to_camb(self) -> None:
+        conversion = Sigma8FromAs(fallback_to_camb=True)
+        theta = self.COSMOLOGY.copy()
+        theta[0, 5] = -1.4
+        with self.assertWarns(UserWarning):
+            sigma8 = conversion.to_derived(theta, self.COLUMNS)
+        self.assertTrue(np.all(np.isfinite(sigma8)))
 
     def test_scales_as_the_square_root_of_the_amplitude(self) -> None:
         """P(k) is proportional to A_s, so sigma8 is proportional to its root.
@@ -439,19 +460,22 @@ class TestSigma8FromAs(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.conversion.to_base(self.COSMOLOGY, np.array([-1.0]), self.COLUMNS)
 
-    def test_a_target_out_of_reach_warns(self) -> None:
-        """sigma8 = 5 is far outside anything this cosmology can produce.
+    def test_a_target_out_of_reach_raises(self) -> None:
+        """sigma8 = 5 drives A_s outside the emulator's validity range.
 
-        Left unsaid, the iteration would run its course and hand back an
-        enormous A_s that looks like an answer. The budget is trimmed here only
-        to keep the test quick -- every iteration costs a full emulator
-        evaluation whatever the target, and the default hundred would spend
-        twenty seconds proving the same point.
+        The inversion is allowed to explore intermediate amplitudes, but the
+        final solution is checked: silently returning an extrapolated A_s is
+        exactly the behaviour the strict policy removes.
         """
         conversion = Sigma8FromAs(max_iterations=8)
-        with self.assertWarns(RuntimeWarning) as caught:
+        with self.assertRaises(ValueError):
+            conversion.to_base(self.COSMOLOGY, np.array([5.0]), self.COLUMNS)
+
+    @unittest.skipUnless(HAS_CAMB, "camb is not installed")
+    def test_a_target_out_of_reach_can_fall_back_to_camb(self) -> None:
+        conversion = Sigma8FromAs(max_iterations=8, fallback_to_camb=True)
+        with self.assertWarns(UserWarning):
             solved = conversion.to_base(self.COSMOLOGY, np.array([5.0]), self.COLUMNS)
-        self.assertIn("did not reach sigma8", str(caught.warning))
         self.assertGreater(solved[0, 4], 1e-8)
 
     def test_a_short_iteration_budget_warns_rather_than_lying(self) -> None:

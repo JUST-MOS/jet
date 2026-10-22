@@ -262,6 +262,12 @@ class BCMHFEmulator:
     ----------
     emulator : Emulator, optional
         The fitted model. Defaults to the bundled one.
+
+    Notes
+    -----
+    The four feedback parameters must lie inside :func:`theta_spec`'s bounds;
+    an out-of-range row raises :class:`ValueError`. There is no analytic
+    baryonic baseline to fall back to.
     """
 
     def __init__(self, emulator: Emulator | None = None) -> None:
@@ -338,6 +344,7 @@ class BCMHFEmulator:
             :math:`(\mathrm{Mpc}/h)^3` for an expected halo count.
         """
         theta = np.atleast_2d(np.asarray(theta, dtype=float))
+        self.x_spec.require_within_bounds(theta, name="theta")
         raw = np.asarray(self._emulator.predict(theta, return_std=False))
         return raw * REFERENCE_VOLUME_SCALE
 

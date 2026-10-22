@@ -278,6 +278,7 @@ def bias_ratio(theta: np.ndarray) -> np.ndarray:
         The flat bias-ratio data vector.
     """
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     return np.asarray(load_brhm_emulator().predict(theta, return_std=False))
 
 
@@ -397,6 +398,7 @@ def ximm_linear(theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray)
     from .pklin import load_pklin_emulator, log_pk_at_k
 
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     r_in = _require_positive_r(r)
 
@@ -526,6 +528,7 @@ def xihm_lgnbar_threshold(
     from .bhm import bias_lgnbar_threshold
 
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     r_in = _require_positive_r(r)
     lgden_in = np.atleast_1d(np.asarray(lgden, dtype=float))
@@ -576,6 +579,7 @@ def xihm_mass(
     from .hmf import HMFEmulator
 
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     r_in = _require_positive_r(r)
     M = np.atleast_1d(np.asarray(M, dtype=float))
@@ -648,8 +652,9 @@ class XiHMEmulator:
         The fitted bias-ratio model. Defaults to the bundled one.
     warn_on_extrapolation : bool, optional
         Whether to warn when ``z``, ``lgden`` or ``r`` leaves the emulated box.
-        Warnings about the *cosmological* parameters are always issued by the
-        inner emulator and are not controlled here.
+        This switch does **not** cover the cosmological ``theta``: a row outside
+        the emulator's validity range always raises :class:`ValueError`, with no
+        CAMB or analytic fallback.
     """
 
     def __init__(
@@ -698,6 +703,7 @@ class XiHMEmulator:
             The flat bias-ratio data vector.
         """
         theta = np.atleast_2d(np.asarray(theta, dtype=float))
+        self.x_spec.require_within_bounds(theta, name="theta")
         return np.asarray(self._emulator.predict(theta, return_std=False))
 
     def ximm(self, theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray) -> np.ndarray:
@@ -713,7 +719,9 @@ class XiHMEmulator:
 
         The interface has three interpolation axes and every layer of it warns
         about them, so asking a caller to silence each layer separately would be
-        a poor deal. ``warn_on_extrapolation`` therefore covers the whole stack.
+        a poor deal. ``warn_on_extrapolation`` therefore covers those warnings.
+        It never suppresses the strict ``theta`` bounds check, which raises
+        :class:`ValueError` regardless.
         """
         if self.warn_on_extrapolation:
             return function(*args, **kwargs)

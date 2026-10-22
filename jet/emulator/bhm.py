@@ -354,6 +354,7 @@ def mass_from_lgden(
         Halo mass in :math:`M_\odot/h`.
     """
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     lgden_in = np.atleast_1d(np.asarray(lgden, dtype=float))
     hmf = _default_hmf() if hmf_emulator is None else hmf_emulator
@@ -447,6 +448,7 @@ def bias_lgnbar_threshold(
     different finite difference, so the two paths do not agree exactly.
     """
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     lgden_in = np.atleast_1d(np.asarray(lgden, dtype=float))
 
@@ -509,6 +511,7 @@ def bias_mass(
         The bias, dimensionless. Zero wherever the mass bin had no halos.
     """
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     M = np.atleast_1d(np.asarray(M, dtype=float))
     hmf = _default_hmf() if hmf_emulator is None else hmf_emulator
@@ -626,6 +629,13 @@ class BhmEmulator:
     hmf_emulator : HMFEmulator, optional
         Mass function used for the density-to-mass inversion. Defaults to the
         bundled one.
+
+    Notes
+    -----
+    ``theta`` outside the emulator's parameter bounds always raises
+    :class:`ValueError`. The bias correction has no analytic counterpart that
+    preserves its meaning, so there is no ``fallback_to_camb`` option; the
+    ``z`` and ``lgden`` interpolation axes keep their warning behaviour.
     """
 
     def __init__(
@@ -661,6 +671,7 @@ class BhmEmulator:
     def ratio(self, theta: np.ndarray) -> np.ndarray:
         """Return the bias correction on the box, shape ``(n, N_BINS)``."""
         theta = np.atleast_2d(np.asarray(theta, dtype=float))
+        self.x_spec.require_within_bounds(theta, name="theta")
         return np.asarray(self._emulator.predict(theta, return_std=False))
 
     def ratio_at(self, theta: np.ndarray, z, lgden) -> np.ndarray:

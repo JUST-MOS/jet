@@ -266,6 +266,18 @@ class TestBhmEmulator(unittest.TestCase):
         self.assertGreater(float(ratio.min()), 0.5)
         self.assertLess(float(ratio.max()), 3.0)
 
+    def test_rejects_out_of_bounds_theta(self) -> None:
+        theta = self.theta.copy()
+        theta[0, 5] = -1.4
+        with self.assertRaises(ValueError):
+            self.emu.ratio(theta)
+        with self.assertRaises(ValueError):
+            self.emu.mass_from_lgden(theta, z=0.0, lgden=-3.0)
+        with self.assertRaises(ValueError):
+            self.emu.bias_lgnbar_threshold(theta, z=0.0, lgden=-3.0)
+        with self.assertRaises(ValueError):
+            self.emu.bias_mass(theta, z=0.0, M=np.array([1e13]))
+
     def test_golden_ratio_at_zero_redshift(self) -> None:
         box = bias_grid(self.emu.ratio(self.theta))[0]
         np.testing.assert_allclose(box[0], GOLDEN_RATIO_Z0, rtol=1e-6)

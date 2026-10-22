@@ -35,6 +35,9 @@ pip install jet              # numpy + scipy
 pip install jet[gp]          # + scikit-learn, for Gaussian-process training
 pip install jet[nn]          # + PyTorch, for neural-network training
 pip install jet[inf]         # + emcee, for inference
+pip install jet[class]       # + CLASS, for total-matter sigma8 targets
+pip install jet[camb]        # + CAMB, for sigma8 and out-of-range fallbacks
+pip install jet[boltzmann]   # + both Boltzmann solvers
 pip install jet[all]         # everything
 ```
 
@@ -153,10 +156,14 @@ frame = spec.frame("sigma8")
 theta_sigma8 = np.array([[0.049, 0.31, 67.66, 0.9665, 0.81, -1.0, 0.0, 0.06]])
 
 theta_as = frame.to_base(theta_sigma8)
-theta_as[0, 4]  # array(2.0845e-09)
+theta_as[0, 4]  # array(2.1025e-09)
 print(theta_as)
 theta = frame.from_base(theta_as)  # back to 0.81
 ```
+
+`sigma8` here is the **total-matter** value, including massive neutrinos. The
+inversion uses the total-matter spectrum composed in `jet.emulator.pkmm`; the
+halo mass function itself still consumes `P_cb`.
 
 ### Halo mass function with baryonic feedback
 
@@ -234,9 +241,11 @@ Four things are worth knowing before using it:
 - **`z`, `lgden` and `r` are interpolation axes, not emulator axes.** The
   Gaussian process sees the eight cosmological parameters only; the other three
   are handled afterwards by linear interpolation of the box, linear in
-  `log10(r)`. Asking for a point outside the box warns and extrapolates rather
-  than raising. Set `XiHMEmulator(warn_on_extrapolation=False)` to silence the
-  whole stack at once.
+  `log10(r)`. Asking for a point outside the box on these three axes warns and
+  extrapolates rather than raising; set
+  `XiHMEmulator(warn_on_extrapolation=False)` to silence them. The eight
+  cosmological parameters are different: an out-of-range `theta` always raises
+  `ValueError`.
 - **Density threshold and mass threshold are different samples.** Holding
   `n(>=M)` fixed and varying `M` is not the same selection as the reverse, so
   `xihm_mass` converts by a finite difference in `log10(n)`, weighted by the
@@ -250,6 +259,85 @@ what needs it.
 See [`examples/xihm_example.py`](examples/xihm_example.py) for a runnable
 walkthrough.
 
+## Out-of-range parameters
+
+Every bundled cosmological emulator treats `Param.bounds` as a **validity**
+range, not merely the extent of the training sample. By default, a `theta` row
+outside those bounds raises `ValueError` and lists every offending parameter,
+rather than silently extrapolating. The same check is available directly as
+`ParameterSpec.require_within_bounds`.
+
+The strict check covers the eight cosmological columns of `theta`. The
+independent interpolation axes (`z`, `lgden`, `r`) keep their existing warning
+behaviour.
+
+Where an analytic fallback exists, it can be enabled explicitly:
+
+```python
+hmf = HMFEmulator.load(fallback_to_camb=True)
+n = hmf.number_density(theta, z=z, M=M)
+```
+
+- `HMFEmulator(..., fallback_to_camb=True)` evaluates out-of-range rows with a
+  linear CAMB CDM+baryon `P(k)` and the pure Castro23 baseline (the emulated
+  ratio is set to one). In-range rows in the same batch still use the emulator.
+  A `UserWarning` names the rows and parameters that were replaced.
+- `Sigma8FromAs(..., fallback_to_camb=True)` uses CAMB total-matter `sigma8`
+  (`delta_tot`) for out-of-range rows. `to_base` checks the input and the final
+  solution; the iteration itself may explore intermediate amplitudes outside
+  the box.
+- `spectral_equivalence_as` defaults to `sigma8_type="emulator"` and
+  `fallback_to_camb=True`. Both the target and the auxiliary sigma8 use the
+  total-matter emulator; each side that leaves the box is replaced by CAMB,
+  with a `UserWarning`. Set `fallback_to_camb=False` to make either side raise
+  `ValueError` instead. `sigma8_type="class"` or `"camb"` uses that Boltzmann
+  backend for **both** sides, so there is no emulator box and
+  `fallback_to_camb` is ignored.
+
+`BhmEmulator`, `XiHMEmulator` and `BCMHFEmulator` never fall back: their
+emulated quantity has no analytic counterpart that preserves its meaning, so
+an out-of-range input is always an error.
+
+## Spectral equivalence
+
+[`jet.equivalence`](jet/equivalence.py) ports the CSST emulator's
+spectral-equivalence method. For a flat `w0waCDM` cosmology it constructs an
+auxiliary model at each redshift whose comoving distance to the last-scattering
+surface (`z* = 1100`) matches the original model, and then rescales `As` so that
+the **total-matter** `sigma8(z)` (including massive neutrinos) matches as well:
+
+```python
+import numpy as np
+from jet.equivalence import spectral_equivalence_as, spectral_equivalence_de
+
+# Omegab, Omegam, H0, ns, As, w0, wa, mnu
+theta = np.array([0.05, 0.31, 68.0, 0.965, 2.1e-9, -1.1, 0.2, 0.06])
+z = np.array([0.5, 1.0, 2.0])
+
+w_const = spectral_equivalence_de(theta, z, wcdm=True)
+w0, wa, err = spectral_equivalence_de(theta, z, return_error=True)
+As_eq = spectral_equivalence_as(theta, z, w0, wa)
+```
+
+`Omegam` is baryons plus cold dark matter, excluding massive neutrinos, and
+`As` is the physical amplitude. Both functions accept a single eight-column
+row or a batch of rows and always keep the sample axis, returning `(1, n_z)` or
+`(n, n_z)`.
+
+`sigma8_type` controls the **entire** sigma8 calculation, not just the target:
+
+- `"emulator"` (default) uses the bundled total-matter emulator for both the
+  target and the auxiliary model. Each side outside the emulator box falls back
+  to CAMB when `fallback_to_camb=True` (the default); set it to `False` to raise
+  instead. The fallback is per side.
+- `"class"` or `"camb"` uses that Boltzmann backend for both sides; no emulator
+  bounds are involved and `fallback_to_camb` is ignored.
+
+The emulator/CAMB comparison assumes the reference's `Nncdm = 1` massive
+neutrino convention (one massive species for `mnu > 0`, massless otherwise).
+See [`examples/spectral_equivalence_example.py`](examples/spectral_equivalence_example.py)
+for a runnable walkthrough.
+
 ## Repository layout
 
 ```
@@ -258,6 +346,7 @@ jet/
 │   ├── spec.py             # ParameterSpec / DataVectorSpec, shared by all stages
 │   ├── derived.py          # derived parameters: sigma8 <- As, h <- H0
 │   ├── cosmology.py        # background expansion the ported physics needs
+│   ├── equivalence.py      # spectral equivalence: distance and sigma8 matching
 │   ├── fourier.py          # FFTLog Hankel transforms (P(k) <-> xi(r))
 │   ├── emulator/           # transforms, backends, bundle format, metrics
 │   │   ├── pklin.py        # reader for the bundled linear-theory P(k) emulator
@@ -278,7 +367,8 @@ jet/
 ├── examples/               # usage notebooks
 │   ├── hmf.ipynb           #   halo mass function quick start
 │   ├── hmf_bcm_example.py  #   baryonic mass function quick start
-│   └── xihm_example.py     #   halo-matter bias ratio quick start
+│   ├── xihm_example.py     #   halo-matter bias ratio quick start
+│   └── equivalence_example.py  # distance and sigma8 matching quick start
 ├── environment.yml         # shared development environment (conda + pip)
 ├── VERSION                 # single source of truth for the version (bump2version-owned)
 ├── .bumpversion.cfg        # version bump configuration

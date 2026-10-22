@@ -41,6 +41,7 @@ import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .emulator.emulator import Emulator
+    from .emulator.pkmm import PkmmProvider
 
 __all__ = [
     "Conversion",
@@ -295,9 +296,11 @@ class Sigma8FromAs(Conversion):
     """:math:`\\sigma_8` standing in for the primordial amplitude :math:`A_s`.
 
     The relation is not analytic, so it is evaluated through the same machinery
-    ``csstemu`` uses: a small linear-theory :math:`P(k)` emulator, integrated
-    against a top-hat window at :math:`R = 8\\,\\mathrm{Mpc}/h`. Two properties
-    of that setup make the conversion cheap:
+    ``csstemu`` uses: a linear-theory **total-matter** :math:`P(k)` emulator,
+    integrated against a top-hat window at :math:`R = 8\\,\\mathrm{Mpc}/h`. The
+    total spectrum is composed from :math:`P_{cb}` and the
+    :math:`P_{nn}/P_{cb}` ratio, so massive neutrinos are included in
+    :math:`\\sigma_8`. Two properties of that setup make the conversion cheap:
 
     * :math:`P(k) \\propto A_s` at fixed cosmology, hence
       :math:`\\sigma_8 \\propto \\sqrt{A_s}`. One evaluation of the emulator
@@ -314,12 +317,16 @@ class Sigma8FromAs(Conversion):
     name, base : str, optional
         Defaults to ``"sigma8"`` and ``"As"``.
     pklin : Emulator, str or None, optional
-        The :math:`P(k)` emulator backing the conversion. ``None`` (the
-        default) uses the copy bundled with ``jet`` under ``jet/data``; a
-        string is resolved like any other weight file, through
-        :func:`jet.emulator.resolve_weights_path`. A live :class:`Emulator`
-        works for in-memory use but cannot be written to a bundle -- save it
-        and pass the path instead.
+        The :math:`P_{cb}(k)` emulator, the first factor of the total-matter
+        composition. ``None`` (the default) uses the copy bundled with ``jet``
+        under ``jet/data``; a string is resolved like any other weight file,
+        through :func:`jet.emulator.resolve_weights_path`. A live
+        :class:`Emulator` works for in-memory use but cannot be written to a
+        bundle -- save it and pass the path instead.
+    ratio_emulator : Emulator, str or None, optional
+        The :math:`P_{nn}/P_{cb}` ratio emulator. ``None`` uses the bundled
+        copy. Together with ``pklin`` it defines the total-matter spectrum used
+        for :math:`\\sigma_8`.
     R : float, optional
         Smoothing scale in :math:`\\mathrm{Mpc}/h`.
     z : float, optional
@@ -339,6 +346,11 @@ class Sigma8FromAs(Conversion):
         only affects how many iterations are needed.
     max_iterations : int, optional
         Safety limit on the inversion.
+    fallback_to_camb : bool, optional
+        Policy for inputs outside the P(k) emulator's parameter bounds. The
+        default raises :class:`ValueError`. When true, :math:`\\sigma_8` is
+        obtained from a linear CAMB CDM+baryon spectrum instead, and a
+        :class:`UserWarning` names the offending parameters.
     """
 
     kind = "sigma8_as"
@@ -351,11 +363,13 @@ class Sigma8FromAs(Conversion):
         name: str = "sigma8",
         base: str = "As",
         pklin: Emulator | str | None = None,
+        ratio_emulator: Emulator | str | None = None,
         R: float = 8.0,
         z: float = 0.0,
         tolerance: float = 1e-8,
         initial_as: float = 2.105e-9,
         max_iterations: int = 100,
+        fallback_to_camb: bool = False,
     ) -> None:
         super().__init__(
             name,
@@ -380,26 +394,38 @@ class Sigma8FromAs(Conversion):
         self.tolerance = float(tolerance)
         self.initial_as = float(initial_as)
         self.max_iterations = int(max_iterations)
+        self.fallback_to_camb = bool(fallback_to_camb)
 
         self._pklin = pklin
-        self._emulator: Emulator | None = None
+        self._ratio = ratio_emulator
+        self._emulator: PkmmProvider | None = None
 
     # ------------------------------------------------------------------
     # The P(k) emulator
     # ------------------------------------------------------------------
     @property
-    def emulator(self) -> Emulator:
-        """The linear-theory :math:`P(k)` emulator, loaded on first use."""
+    def emulator(self) -> PkmmProvider:
+        """The total-matter :math:`P(k)` provider, loaded on first use."""
         if self._emulator is None:
             from .emulator.emulator import Emulator as _Emulator
             from .emulator.pklin import load_pklin_emulator
+            from .emulator.pkmm import PkmmProvider, load_ratio_emulator
 
             if self._pklin is None:
-                self._emulator = load_pklin_emulator()
+                pcb = load_pklin_emulator()
             elif isinstance(self._pklin, str):
-                self._emulator = _Emulator.load(self._pklin)
+                pcb = _Emulator.load(self._pklin)
             else:
-                self._emulator = self._pklin
+                pcb = self._pklin
+
+            if self._ratio is None:
+                ratio = load_ratio_emulator()
+            elif isinstance(self._ratio, str):
+                ratio = _Emulator.load(self._ratio)
+            else:
+                ratio = self._ratio
+
+            self._emulator = PkmmProvider(pcb, ratio)
         return self._emulator
 
     def _theta(self, X: np.ndarray, columns: Columns, As: np.ndarray) -> np.ndarray:
@@ -417,12 +443,64 @@ class Sigma8FromAs(Conversion):
         }
         return np.column_stack([values[p] for p in self.PKLIN_PARAMETERS])
 
-    def _sigma8(self, theta: np.ndarray) -> np.ndarray:
+    def _bounds_mask(self, theta: np.ndarray) -> np.ndarray:
+        """Return rows of ``theta`` outside the P(k) emulator's bounds."""
+        bounds = self.emulator.x_spec.bounds_array()
+        return np.any((theta < bounds[:, 0]) | (theta > bounds[:, 1]), axis=1)
+
+    def _warn_camb(self, theta: np.ndarray, mask: np.ndarray, method: str) -> None:
+        """Warn that CAMB is supplying sigma8 for the masked rows."""
+        violations = self.emulator.x_spec.check_within_bounds(theta[mask], slack=0.0)
+        original_rows = np.flatnonzero(mask)
+        details = []
+        for param_name, row, value in violations:
+            spec = self.emulator.x_spec
+            low, high = spec.params[spec.index(param_name)].bounds  # type: ignore[misc]
+            details.append(
+                f"row {int(original_rows[row])}: {param_name}={value:.6g} "
+                f"outside [{low:.6g}, {high:.6g}]"
+            )
+        warnings.warn(
+            f"{method}: {int(mask.sum())} sample(s) outside the P(k) emulator's "
+            "validity range; using CAMB sigma8:\n  " + "\n  ".join(details),
+            UserWarning,
+            stacklevel=3,
+        )
+
+    def _sigma8(
+        self,
+        theta: np.ndarray,
+        *,
+        allow_out_of_bounds: bool,
+        warn: bool,
+    ) -> np.ndarray:
         """Evaluate :math:`\\sigma_8` for rows of emulator-frame parameters."""
+        from ._boltzmann import camb_sigma8
         from .emulator.pklin import sigma8_of_pk
 
-        Pk = self.emulator.predict(theta, return_std=False)
-        return sigma8_of_pk(Pk, R=self.R, z=self.z)
+        theta = np.atleast_2d(np.asarray(theta, dtype=float))
+        outside = self._bounds_mask(theta)
+        if np.any(outside):
+            if not allow_out_of_bounds and not self.fallback_to_camb:
+                self.emulator.x_spec.require_within_bounds(theta, name="theta")
+            if warn and self.fallback_to_camb:
+                self._warn_camb(theta, outside, "Sigma8FromAs")
+
+        out = np.empty(theta.shape[0], dtype=float)
+        inside = ~outside
+        if np.any(inside):
+            Pk = self.emulator.predict(theta[inside], return_std=False)
+            out[inside] = sigma8_of_pk(Pk, R=self.R, z=self.z)
+        if np.any(outside):
+            if self.fallback_to_camb:
+                for index in np.flatnonzero(outside):
+                    out[index] = float(camb_sigma8(theta[index], R=self.R, z=self.z)[0])
+            else:
+                # This path is only reached for intermediate inversion steps;
+                # the caller checks the final solution separately.
+                Pk = self.emulator.predict(theta[outside], return_std=False)
+                out[outside] = sigma8_of_pk(Pk, R=self.R, z=self.z)
+        return out
 
     # ------------------------------------------------------------------
     # Conversion
@@ -430,7 +508,8 @@ class Sigma8FromAs(Conversion):
     def to_derived(self, X: np.ndarray, columns: Columns) -> np.ndarray:
         self._check(columns)
         X = np.asarray(X, dtype=float)
-        return self._sigma8(self._theta(X, columns, X[:, columns[self.base]]))
+        theta = self._theta(X, columns, X[:, columns[self.base]])
+        return self._sigma8(theta, allow_out_of_bounds=False, warn=True)
 
     def to_base(self, X: np.ndarray, values: np.ndarray, columns: Columns) -> np.ndarray:
         self._check(columns)
@@ -441,11 +520,28 @@ class Sigma8FromAs(Conversion):
         if np.any(target <= 0.0):
             raise ValueError("sigma8 must be positive")
 
+        # The base column of ``X`` holds the *derived* values in this
+        # direction, not an As guess. Use the configured initial amplitude.
+        initial_theta = self._theta(X, columns, np.full(X.shape[0], self.initial_as))
+        initial_outside = self._bounds_mask(initial_theta)
+        if np.any(initial_outside):
+            if self.fallback_to_camb:
+                self._warn_camb(initial_theta, initial_outside, "Sigma8FromAs.to_base")
+            else:
+                self.emulator.x_spec.require_within_bounds(initial_theta, name="theta")
+
         As = np.full(X.shape[0], self.initial_as)
         converged = np.zeros(X.shape[0], dtype=bool)
+        exhausted = True
 
         for _ in range(self.max_iterations):
-            guess = self._sigma8(self._theta(X, columns, As))
+            # Intermediate As values may leave the box; only the input and the
+            # final solution are required to be trustworthy.
+            guess = self._sigma8(
+                self._theta(X, columns, As),
+                allow_out_of_bounds=True,
+                warn=False,
+            )
             if np.any(guess <= 0.0):
                 raise RuntimeError(
                     "the P(k) emulator returned a non-positive sigma8; the input "
@@ -456,8 +552,19 @@ class Sigma8FromAs(Conversion):
             As = np.where(converged, As, As * (target / guess) ** 2)
             converged = np.abs(guess - target) < self.tolerance
             if converged.all():
+                exhausted = False
                 break
-        else:
+
+        final_theta = self._theta(X, columns, As)
+        final_outside = self._bounds_mask(final_theta)
+        if np.any(final_outside):
+            if self.fallback_to_camb:
+                if not np.any(initial_outside):
+                    self._warn_camb(final_theta, final_outside, "Sigma8FromAs.to_base")
+            else:
+                self.emulator.x_spec.require_within_bounds(final_theta, name="theta")
+
+        if exhausted:
             # The step squares the error and is exact for a power law, so failing
             # to converge means the target is out of reach -- a sigma8 the
             # emulator cannot produce at any A_s -- rather than slow convergence.
@@ -487,26 +594,41 @@ class Sigma8FromAs(Conversion):
                 "bundle; call Emulator.save() on it first and construct the conversion "
                 "with the resulting path (or leave 'pklin' as None to use the bundled one)"
             )
+        if self._ratio is None:
+            ratio: Any = "builtin"
+        elif isinstance(self._ratio, str):
+            ratio = self._ratio
+        else:
+            raise TypeError(
+                "this conversion holds a live ratio Emulator, which cannot be written "
+                "to a bundle; save it and pass the path, or leave 'ratio_emulator' as "
+                "None to use the bundled one"
+            )
         return {
             "pklin": pklin,
+            "ratio": ratio,
             "R": self.R,
             "z": self.z,
             "tolerance": self.tolerance,
             "initial_as": self.initial_as,
             "max_iterations": self.max_iterations,
+            "fallback_to_camb": self.fallback_to_camb,
         }
 
     @classmethod
     def from_state(cls, state: Mapping[str, Any]) -> Sigma8FromAs:
         settings = state["state"]
         pklin = settings["pklin"]
+        ratio = settings.get("ratio", "builtin")
         return cls(
             name=state["name"],
             base=state["base"],
             pklin=None if pklin == "builtin" else pklin,
+            ratio_emulator=None if ratio == "builtin" else ratio,
             R=settings["R"],
             z=settings["z"],
             tolerance=settings["tolerance"],
             initial_as=settings["initial_as"],
             max_iterations=settings["max_iterations"],
+            fallback_to_camb=settings.get("fallback_to_camb", False),
         )

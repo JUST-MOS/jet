@@ -1,21 +1,31 @@
 """
-The bundled linear-theory :math:`P(k)` emulator behind the ``sigma8`` conversion.
+The bundled linear-theory CDM+baryon :math:`P(k)` emulator.
 
-:class:`jet.derived.Sigma8FromAs` needs to know :math:`\\sigma_8` as a function
-of cosmology, and jet does not compute power spectra. It borrows a small
-Gaussian-process emulator instead, which is read from ``jet/data`` and wrapped as
-an ordinary :class:`~jet.emulator.Emulator` so that it reuses the same
-transforms, backend and bundle format as everything else.
+This is the :math:`P_{cb}` spectrum consumed by the halo mass function, halo
+bias and correlation-function models. The total-matter :math:`\\sigma_8` used by
+:class:`jet.derived.Sigma8FromAs` is composed from this spectrum and the
+:math:`P_{nn}/P_{cb}` ratio in :mod:`jet.emulator.pkmm`, so this module is the
+first factor of that composition rather than a sigma8 source on its own.
+
+jet does not compute power spectra. It borrows a small Gaussian-process
+emulator instead, which is read from ``jet/data`` and wrapped as an ordinary
+:class:`~jet.emulator.Emulator` so that it reuses the same transforms, backend
+and bundle format as everything else.
 
 The emulator predicts :math:`\\log_{10} P_{\\mathrm{cb,lin}}(k, z)` on a fixed
 grid: 12 redshifts from the reference file, and 1000 wavenumbers in
-:math:`h/\\mathrm{Mpc}`. Its data vector is that grid flattened, redshift first::
+:math:`h/\\mathrm{Mpc}`. It was trained on the reference's ``Nncdm = 1``
+cosmology set: one massive neutrino species when ``mnu > 0``, massless
+neutrinos otherwise. The degenerate three-species split is not represented by
+this bundle.
+
+Its data vector is that grid flattened, redshift first::
 
     value[j * n_k + i]  ==  P(k_i, z_j)        0 <= j < N_Z, 0 <= i < N_K
 
 with :data:`Z_GRID` and :func:`k_grid` giving the two axes in ascending order.
-Line 0 is therefore :math:`z = 0`, which is the row :math:`\\sigma_8` is defined
-from.
+Line 0 is therefore :math:`z = 0`, which is the row :math:`\\sigma_8` is
+evaluated at by default.
 
 .. warning::
     The weights under ``jet/data`` are large and are *not* tracked by git; see
@@ -401,16 +411,18 @@ def sigma8_of_pk(Pk: np.ndarray, R: float = 8.0, z: float = 0.0) -> np.ndarray:
         \\sigma^2(R) = \\int P(k)\\, W^2(kR)\\, \\frac{k^3}{2\\pi^2}\\, d\\ln k,
         \\qquad W(x) = \\frac{3(\\sin x - x\\cos x)}{x^3}
 
-    on :data:`INTEGRATION_K`, with :math:`P(k)` interpolated from the emulator's
-    grid. The window is the Fourier transform of a real-space top hat, so
-    :math:`\\sigma_8` is the RMS matter fluctuation in spheres of
+    on :data:`INTEGRATION_K`, with :math:`P(k)` interpolated from the supplied
+    spectrum's grid. The window is the Fourier transform of a real-space top
+    hat, so :math:`\\sigma_8` is the RMS matter fluctuation in spheres of
     :math:`8\\,\\mathrm{Mpc}/h`.
 
     Parameters
     ----------
     Pk : ndarray of shape (n_samples, N_BINS)
-        Power spectra in :math:`(\\mathrm{Mpc}/h)^3`, as returned by the
-        emulator.
+        Power spectra in :math:`(\\mathrm{Mpc}/h)^3` in the bundled P(k)
+        layout. This may be :math:`P_{cb}` or the total-matter spectrum
+        composed by :mod:`jet.emulator.pkmm`; the function itself does not
+        assume which.
     R : float, optional
         Smoothing scale in :math:`\\mathrm{Mpc}/h`.
     z : float, optional
@@ -424,10 +436,11 @@ def sigma8_of_pk(Pk: np.ndarray, R: float = 8.0, z: float = 0.0) -> np.ndarray:
     Notes
     -----
     A thin wrapper over :func:`sigma_of_pk` that fixes the radius axis to the
-    single value :math:`\sigma_8` is defined at. Kept separate because the
-    :math:`\sigma_8` golden value is what the derived-parameter machinery is
-    regression-tested against, and a conversion should not have to index into a
-    two-dimensional result to get it.
+    single value :math:`\sigma_8` is defined at. It is agnostic about whether
+    the input is :math:`P_{cb}` or total matter; the caller decides. Kept
+    separate because the :math:`\sigma_8` golden value is what the
+    derived-parameter machinery is regression-tested against, and a conversion
+    should not have to index into a two-dimensional result to get it.
     """
     values = sigma_of_pk(Pk, R=R, z=z)
     if values.ndim != 1:

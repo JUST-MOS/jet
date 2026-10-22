@@ -265,11 +265,13 @@ def build(source: Path, destination: Path, verbose: bool = True) -> Path:
 
 
 def _reference_sigma8(source: Path, thetas: np.ndarray) -> np.ndarray | None:
-    """Compute sigma8 with the reference implementation, if it is importable.
+    """Compute **CDM+baryon** sigma8 with the reference, if importable.
 
-    Used only to check the build. ``csstemu`` is not a jet dependency, so a
-    missing or unimportable package means the check is skipped rather than
-    failed.
+    This bundle is :math:`P_{cb}` only, so the verification quantity is
+    ``sigma8_cb``, not the total-matter sigma8 used by
+    :mod:`jet.emulator.pkmm`. Used only to check the build; ``csstemu`` is not
+    a jet dependency, so a missing or unimportable package means the check is
+    skipped rather than failed.
     """
     sys.path.insert(0, str(source.parent.parent))
     try:
@@ -292,7 +294,7 @@ def _reference_sigma8(source: Path, thetas: np.ndarray) -> np.ndarray | None:
 
 
 def _verify(destination: Path, source: Path, verbose: bool = True) -> int:
-    """Reload the bundle and compare sigma8 against the reference.
+    """Reload the bundle and compare sigma8_cb against the reference.
 
     Returns
     -------
@@ -330,7 +332,7 @@ def _verify(destination: Path, source: Path, verbose: bool = True) -> int:
     worst = float(np.max(np.abs(mine / reference - 1.0)))
     if verbose:
         for got, want in zip(mine, reference, strict=True):
-            print(f"verify : sigma8 = {got:.12f}  reference = {want:.12f}")
+            print(f"verify : sigma8_cb = {got:.12f}  reference = {want:.12f}")
         print(f"verify : worst relative difference {worst:.3e}")
     # The two evaluations are mathematically identical but not bit-identical:
     # the distances come from a Gram matrix rather than scipy's cdist, and the
