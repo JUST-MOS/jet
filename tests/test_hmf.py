@@ -14,6 +14,7 @@ future change to the port cannot pass by being merely self-consistent.
 
 from __future__ import annotations
 
+import importlib.util
 import math
 import unittest
 
@@ -46,6 +47,7 @@ from jet.emulator.pklin import data_dir
 # The bundled weights are not tracked by git, so a fresh clone has no data and
 # the tests that need it must skip rather than fail.
 HAS_DATA = (data_dir() / BUNDLE_NAME).exists()
+HAS_CAMB = importlib.util.find_spec("camb") is not None
 
 #: The first training cosmology of the reference's Sobol design, with the
 #: primordial amplitude converted from the reference's ``A_s * 1e9``.
@@ -362,6 +364,58 @@ class TestHMFEmulator(unittest.TestCase):
         self.assertGreater(float(ratio.min()), 0.5)
         self.assertLess(float(ratio.max()), 1.5)
 
+    def _out_of_bounds_theta(self) -> np.ndarray:
+        theta = self.theta.copy()
+        theta[0, 5] = -1.4
+        return theta
+
+    def test_rejects_out_of_bounds_theta(self):
+        theta = self._out_of_bounds_theta()
+        with self.assertRaises(ValueError):
+            self.hmf.number_density(theta, z=PROBE_Z, M=PROBE_M)
+        with self.assertRaises(ValueError):
+            self.hmf.ratio(theta)
+
+    @unittest.skipUnless(HAS_CAMB, "camb is not installed")
+    def test_fallback_to_camb_matches_castro23(self):
+        from jet._boltzmann import CambPkProvider
+
+        theta = self._out_of_bounds_theta()
+        fallback = HMFEmulator(self.hmf.emulator, fallback_to_camb=True)
+        with self.assertWarns(UserWarning):
+            got = fallback.number_density(theta, z=PROBE_Z, M=PROBE_M)
+        want = castro23_cumulative(theta, z=PROBE_Z, M=PROBE_M, pk_emulator=CambPkProvider()) * 1e-9
+        np.testing.assert_allclose(got, want, rtol=1e-12, atol=0.0)
+
+    @unittest.skipUnless(HAS_CAMB, "camb is not installed")
+    def test_dndlnM_fallback_matches_castro23(self):
+        from jet._boltzmann import CambPkProvider
+
+        theta = self._out_of_bounds_theta()
+        fallback = HMFEmulator(self.hmf.emulator, fallback_to_camb=True)
+        with self.assertWarns(UserWarning):
+            got = fallback.dndlnM(theta, z=PROBE_Z, M=PROBE_M)
+        want = castro23_dndlnM(theta, z=PROBE_Z, M=PROBE_M, pk_emulator=CambPkProvider())
+        np.testing.assert_allclose(got, want, rtol=1e-12, atol=0.0)
+
+    @unittest.skipUnless(HAS_CAMB, "camb is not installed")
+    def test_mixed_batch_falls_back_per_row(self):
+        from jet._boltzmann import CambPkProvider
+
+        theta = np.vstack([self.theta, self._out_of_bounds_theta()])
+        fallback = HMFEmulator(self.hmf.emulator, fallback_to_camb=True)
+        with self.assertWarns(UserWarning):
+            got = fallback.number_density(theta, z=PROBE_Z, M=PROBE_M)
+
+        normal = self.hmf.number_density(theta[:1], z=PROBE_Z, M=PROBE_M)
+        np.testing.assert_allclose(got[:1], normal, rtol=1e-12, atol=0.0)
+
+        want = (
+            castro23_cumulative(theta[1:], z=PROBE_Z, M=PROBE_M, pk_emulator=CambPkProvider())
+            * 1e-9
+        )
+        np.testing.assert_allclose(got[1:], want, rtol=1e-12, atol=0.0)
+
     def test_default_axes_are_the_native_grid(self):
         values = self.hmf.number_density(self.theta)
         self.assertEqual(values.shape, (1, N_Z, FINE_CENTERS.size))
@@ -423,7 +477,7 @@ class TestHMFEmulator(unittest.TestCase):
         self.assertTrue(np.all(np.diff(values) < 0.0))
 
     def test_handles_several_cosmologies_at_once(self):
-        theta = np.vstack([TRAINING_COSMOLOGY, TRAINING_COSMOLOGY * [1, 1, 1, 1, 1.2, 1, 1, 1]])
+        theta = np.vstack([TRAINING_COSMOLOGY, TRAINING_COSMOLOGY * [1, 1, 1, 1, 1.1, 1, 1, 1]])
         values = self.hmf.number_density(theta, z=np.array([0.0]), M=np.array([1e13]))
         self.assertEqual(values.shape, (2, 1, 1))
         # Raising As raises the amplitude, so there are more haloes.

@@ -338,6 +338,7 @@ class BCMHFEmulator:
             :math:`(\mathrm{Mpc}/h)^3` for an expected halo count.
         """
         theta = np.atleast_2d(np.asarray(theta, dtype=float))
+        self.x_spec.require_within_bounds(theta, name="theta")
         raw = np.asarray(self._emulator.predict(theta, return_std=False))
         return raw * REFERENCE_VOLUME_SCALE
 

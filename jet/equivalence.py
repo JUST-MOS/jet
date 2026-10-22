@@ -2,7 +2,7 @@
 
 For a flat ``w0waCDM`` cosmology, the *spectral equivalence* method constructs
 an auxiliary model at each redshift whose distance to the last-scattering
-surface and whose :math:`\\sigma_{8,\\mathrm{cb}}(z)` match the original model.
+surface and whose total-matter :math:`\\sigma_8(z)` match the original model.
 The auxiliary model is either a ``wCDM`` model (one free equation-of-state
 parameter) or a ``w0waCDM`` model (two free parameters), and its amplitude is
 rescaled so that the clustering amplitude agrees.
@@ -49,6 +49,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize, newton
 
+from ._boltzmann import camb_sigma8
 from .cosmology import (
     _COMOVING_A_MIN,
     _COMOVING_GRID_SIZE,
@@ -323,7 +324,7 @@ def _class_params(row: np.ndarray, z: np.ndarray) -> dict:
 
 
 def _sigma8_class(row: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Target :math:`\\sigma_{8,\\mathrm{cb}}(z)` from one CLASS run."""
+    """Target total-matter :math:`\\sigma_R(z)` from one CLASS run."""
     try:
         from classy import Class
     except ImportError:
@@ -339,55 +340,12 @@ def _sigma8_class(row: np.ndarray, z: np.ndarray) -> np.ndarray:
 
     h0 = row[2] / 100.0
     radius = SIGMA8_R / h0
-    if row[7] == 0.0:
-        return np.array([float(cosmo.sigma(radius, zz)) for zz in z])
-    return np.array([float(cosmo.sigma_cb(radius, zz)) for zz in z])
+    return np.array([float(cosmo.sigma(radius, zz)) for zz in z])
 
 
 def _sigma8_camb(row: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Target :math:`\\sigma_{8,\\mathrm{cb}}(z)` from one CAMB run."""
-    try:
-        import camb
-    except ImportError:
-        raise ImportError(
-            "sigma8_type='camb' or an out-of-bounds amplitude fallback requires "
-            "the 'camb' package; install it with 'pip install camb'"
-        ) from None
-
-    z = np.atleast_1d(np.asarray(z, dtype=float))
-    Omegab, Omegam, H0, ns, As, w0, wa, mnu = row
-    h0 = H0 / 100.0
-    params = camb.CAMBparams()
-    params.set_cosmology(
-        H0=float(h0 * 100.0),
-        omch2=float((Omegam - Omegab) * h0 * h0),
-        ombh2=float(Omegab * h0 * h0),
-        num_massive_neutrinos=0 if mnu == 0.0 else 1,
-        standard_neutrino_neff=_NEFF,
-        mnu=float(mnu),
-    )
-    params.InitPower.set_params(ns=float(ns), As=float(As))
-    params.set_dark_energy(w=float(w0), wa=float(wa), dark_energy_model="ppf")
-    params.set_matter_power(kmax=_BOLTZMANN_KMAX, redshifts=z)
-    results = camb.get_results(params)
-
-    # CAMB may reorder or extend the redshift list; look each requested value
-    # up explicitly rather than assuming its position.
-    transfer_z = np.asarray(results.transfer_redshifts, dtype=float)
-    values = []
-    for zz in z:
-        matches = np.flatnonzero(np.isclose(transfer_z, zz))
-        if matches.size == 0:
-            raise RuntimeError(f"CAMB did not return sigma8 at z={zz}")
-        sigma = results.get_sigmaR(
-            R=SIGMA8_R,
-            z_indices=int(matches[0]),
-            hubble_units=True,
-            var1="delta_nonu",
-            var2="delta_nonu",
-        )
-        values.append(float(np.asarray(sigma).reshape(-1)[0]))
-    return np.array(values)
+    """Target total-matter :math:`\\sigma_R(z)` from one CAMB run."""
+    return camb_sigma8(row, R=SIGMA8_R, z=z, kmax=_BOLTZMANN_KMAX)
 
 
 def _sigma8_from_pk(Pk: np.ndarray, z: np.ndarray) -> np.ndarray:
@@ -406,17 +364,17 @@ def _sigma8_from_pk(Pk: np.ndarray, z: np.ndarray) -> np.ndarray:
 def _sigma8_emulator(
     rows: np.ndarray,
     z: np.ndarray,
-    emulator: Emulator,
+    provider,
 ) -> np.ndarray:
-    """Evaluate the emulator :math:`\\sigma_{8,\\mathrm{cb}}(z)` for rows."""
+    """Evaluate the total-matter emulator :math:`\\sigma_R(z)` for rows."""
     rows = np.atleast_2d(np.asarray(rows, dtype=float))
     z = np.atleast_1d(np.asarray(z, dtype=float))
     if rows.shape[0] == 1 and z.size > 1:
         # One cosmology evaluated at several redshifts: predict once.
-        Pk = emulator.predict(rows, return_std=False)
+        Pk = provider.predict(rows, return_std=False)
         Pk = np.repeat(Pk, z.size, axis=0)
     else:
-        Pk = emulator.predict(rows, return_std=False)
+        Pk = provider.predict(rows, return_std=False)
     return _sigma8_from_pk(Pk, z)
 
 
@@ -438,11 +396,11 @@ def _target_sigma8(
     row: np.ndarray,
     z: np.ndarray,
     sigma8_type: str,
-    emulator: Emulator | None,
+    provider,
 ) -> np.ndarray:
     """Target sigma8 of the original model at every ``z``."""
     if sigma8_type == "emulator":
-        return _sigma8_emulator(row[None, :], z, emulator)
+        return _sigma8_emulator(row[None, :], z, provider)
     return _target_sigma8_cached(
         sigma8_type,
         tuple(float(value) for value in row),
@@ -451,7 +409,7 @@ def _target_sigma8(
 
 
 def _resolved_emulator(emulator: Emulator | None) -> Emulator:
-    """Return the caller's emulator or load the bundled one."""
+    """Return the caller's Pcb emulator or load the bundled one."""
     if emulator is not None:
         if not isinstance(emulator, Emulator):
             raise TypeError(
@@ -463,9 +421,64 @@ def _resolved_emulator(emulator: Emulator | None) -> Emulator:
     return load_pklin_emulator()
 
 
+def _resolved_ratio(ratio_emulator: Emulator | None) -> Emulator:
+    """Return the caller's Pnn/Pcb ratio emulator or the bundled one."""
+    if ratio_emulator is not None:
+        if not isinstance(ratio_emulator, Emulator):
+            raise TypeError(
+                "ratio_emulator must be a jet.emulator.Emulator, got "
+                f"{type(ratio_emulator).__name__}"
+            )
+        return ratio_emulator
+    from .emulator.pkmm import load_ratio_emulator
+
+    return load_ratio_emulator()
+
+
+def _resolved_pkmm(
+    emulator: Emulator | None,
+    ratio_emulator: Emulator | None,
+):
+    """Return the total-matter P(k) provider."""
+    from .emulator.pkmm import PkmmProvider, load_pkmm_provider
+
+    if emulator is None and ratio_emulator is None:
+        return load_pkmm_provider()
+    return PkmmProvider(
+        _resolved_emulator(emulator),
+        _resolved_ratio(ratio_emulator),
+    )
+
+
 def _outside_bounds(rows: np.ndarray, bounds: np.ndarray) -> np.ndarray:
     """Boolean mask of rows outside an array of ``(dim, 2)`` parameter bounds."""
     return np.any((rows < bounds[:, 0]) | (rows > bounds[:, 1]), axis=1)
+
+
+def _warn_auxiliary_fallback(
+    theta: np.ndarray,
+    mask: np.ndarray,
+    spec,
+    z_flat: np.ndarray,
+    n_z: int,
+) -> None:
+    """Warn that CAMB is supplying the auxiliary sigma8 for masked rows."""
+    violations = spec.check_within_bounds(theta[mask], slack=0.0)
+    original_rows = np.flatnonzero(mask)
+    details = []
+    for param_name, row, value in violations:
+        flat_index = int(original_rows[row])
+        low, high = spec.params[spec.index(param_name)].bounds  # type: ignore[misc]
+        details.append(
+            f"sample {flat_index // n_z}, z={z_flat[flat_index]:g}: "
+            f"{param_name}={value:.6g} outside [{low:.6g}, {high:.6g}]"
+        )
+    warnings.warn(
+        "spectral_equivalence_as: auxiliary parameters leave the emulator's "
+        "training box; using CAMB sigma8:\n  " + "\n  ".join(details),
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +626,9 @@ def spectral_equivalence_as(
     wa_eq=None,
     *,
     sigma8_type: str = "class",
+    fallback_to_camb: bool = False,
     emulator: Emulator | None = None,
+    ratio_emulator: Emulator | None = None,
 ) -> np.ndarray:
     r"""Rescale ``As`` so the auxiliary model matches the target sigma8.
 
@@ -622,9 +637,10 @@ def spectral_equivalence_as(
     .. math::
 
         A_{s,\mathrm{eq}}(z) = A_s
-        \left(\frac{\sigma_{8,\mathrm{cb}}^{\mathrm{target}}(z)}
-        {\sigma_{8,\mathrm{cb}}^{\mathrm{eq}}(z)}\right)^2,
+        \left(\frac{\sigma_8^{\mathrm{target}}(z)}
+        {\sigma_8^{\mathrm{eq}}(z)}\right)^2,
 
+    using the **total-matter** :math:`\sigma_8` (including massive neutrinos),
     which relies on :math:`\sigma_8 \propto \sqrt{A_s}` in the linear regime.
 
     Parameters
@@ -638,15 +654,24 @@ def spectral_equivalence_as(
         one-dimensional array of length ``n_z`` is accepted; for ``n > 1`` the
         shape must be ``(n, n_z)``. ``wa_eq=None`` means zero.
     sigma8_type : {"class", "camb", "emulator"}, optional
-        Backend for the **target** sigma8. For ``"class"`` and ``"camb"`` the
-        auxiliary sigma8 comes from the emulator when the auxiliary parameters
-        lie inside its training box, and from CAMB when they do not. This
-        mixed behaviour is the reference's and is preserved deliberately.
-        ``"emulator"`` uses the emulator for both the target and the auxiliary
-        value.
+        Backend for the **target** total-matter sigma8. ``"class"`` and
+        ``"camb"`` accept an original model outside the emulator box because
+        the target comes from the Boltzmann code. The auxiliary sigma8 comes
+        from the total-matter emulator when the auxiliary parameters lie inside
+        its training box; if they do not, the default is to raise, and
+        ``fallback_to_camb=True`` switches to CAMB. ``"emulator"`` uses the
+        emulator for both the target and the auxiliary value and **always**
+        raises when either is outside the box, regardless of
+        ``fallback_to_camb``.
+    fallback_to_camb : bool, optional
+        Whether an auxiliary model outside the emulator box may use CAMB for
+        its sigma8. Only affects ``sigma8_type="class"`` and ``"camb"``.
     emulator : jet.emulator.Emulator, optional
-        Emulator used for the auxiliary sigma8. ``None`` loads the bundled
-        linear P(k) emulator.
+        :math:`P_{cb}(k)` emulator, the first factor of the total-matter
+        composition. ``None`` loads the bundled one.
+    ratio_emulator : jet.emulator.Emulator, optional
+        :math:`P_{nn}/P_{cb}` ratio emulator, the second factor. ``None`` loads
+        the bundled one.
 
     Returns
     -------
@@ -659,9 +684,13 @@ def spectral_equivalence_as(
 
     # The bounds live in the shared cosmological spec, so the emulator bundle
     # is only needed when an auxiliary sigma8 actually comes from it.
+    provider = None
     if sigma8_type == "emulator":
-        emulator = _resolved_emulator(emulator)
-        bounds = emulator.x_spec.bounds_array()
+        provider = _resolved_pkmm(emulator, ratio_emulator)
+        # The target sigma8 is evaluated by the emulator, so the original
+        # samples must be inside its box.
+        provider.x_spec.require_within_bounds(theta_values, name="theta")
+        bounds = provider.x_spec.bounds_array()
     elif emulator is not None:
         bounds = emulator.x_spec.bounds_array()
     else:
@@ -704,7 +733,7 @@ def spectral_equivalence_as(
     # Target sigma8 of the original model.
     sigma8_target = np.empty((n_samples, n_z), dtype=float)
     for index, row in enumerate(theta_values):
-        sigma8_target[index] = _target_sigma8(row, z_values, sigma8_type, emulator)
+        sigma8_target[index] = _target_sigma8(row, z_values, sigma8_type, provider)
 
     # Auxiliary theta, flattened row-major as (sample, redshift).
     theta_eq = np.empty((n_samples, n_z, len(PARAMETER_NAMES)), dtype=float)
@@ -722,30 +751,33 @@ def spectral_equivalence_as(
     sigma8_aux = np.empty(n_samples * n_z, dtype=float)
 
     # The reference uses the emulator whenever the auxiliary model is inside
-    # its design box. Outside the box it falls back to CAMB (the reference's
-    # set_cosmos default), not to sigma8_type. The explicit "emulator" mode is
-    # a jet extension and always uses the emulator.
+    # its design box. Outside the box the new default refuses to extrapolate;
+    # fallback_to_camb=True reproduces the reference's CAMB behaviour. The
+    # explicit "emulator" mode is a jet extension and always refuses.
+    outside = _outside_bounds(theta_eq_flat, bounds)
     if sigma8_type == "emulator":
+        if np.any(outside):
+            provider.x_spec.require_within_bounds(theta_eq_flat, name="auxiliary theta")
         emulator_mask = np.ones(n_samples * n_z, dtype=bool)
     else:
-        emulator_mask = ~_outside_bounds(theta_eq_flat, bounds)
+        if np.any(outside) and not fallback_to_camb:
+            spec = emulator.x_spec if emulator is not None else pklin_theta_spec()
+            spec.require_within_bounds(theta_eq_flat, name="auxiliary theta")
+        emulator_mask = ~outside
+        if np.any(outside):
+            spec = emulator.x_spec if emulator is not None else pklin_theta_spec()
+            _warn_auxiliary_fallback(theta_eq_flat, outside, spec, z_flat, n_z)
 
     if np.any(emulator_mask):
-        if emulator is None:
-            emulator = _resolved_emulator(None)
+        if provider is None:
+            provider = _resolved_pkmm(emulator, ratio_emulator)
         sigma8_aux[emulator_mask] = _sigma8_emulator(
             theta_eq_flat[emulator_mask],
             z_flat[emulator_mask],
-            emulator,
+            provider,
         )
 
     if np.any(~emulator_mask):
-        warnings.warn(
-            "spectral_equivalence_as: auxiliary parameters leave the "
-            "emulator's training box; falling back to CAMB for sigma8",
-            UserWarning,
-            stacklevel=2,
-        )
         for flat_index in np.flatnonzero(~emulator_mask):
             sigma8_aux[flat_index] = _sigma8_camb(
                 theta_eq_flat[flat_index],

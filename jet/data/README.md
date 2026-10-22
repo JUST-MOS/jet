@@ -8,9 +8,10 @@ originate.
 ## `pklin.gp.npz`
 
 A Gaussian-process emulator for the linear-theory cold-dark-matter + baryon
-power spectrum, packaged in jet's own bundle format. It is what backs the
-`sigma8` derived parameter (see `jet.derived.Sigma8FromAs`), because jet does
-not compute power spectra itself.
+power spectrum, packaged in jet's own bundle format. It is the `P_cb` factor
+used by the halo mass function, halo bias and correlation function, and the
+first factor of the total-matter spectrum that backs the `sigma8` derived
+parameter (see `jet.emulator.pkmm` and `jet.derived.Sigma8FromAs`).
 
 It predicts `P(k, z)` in `(Mpc/h)^3` on a flattened grid of 12 redshifts
 (`jet.emulator.pklin.Z_GRID`, ascending, `z = 0` first) by 1000 wavenumbers.
@@ -21,6 +22,26 @@ layout and the accessors.
 The halo-mass-function bundle reads its mass grid, its per-redshift block
 boundaries and the Castro23 coefficients from its `extra` arrays in the same
 way, so it needs no constants beyond the ones it declares itself.
+
+## `pknn_ratio.gp.npz`
+
+A Gaussian-process emulator for the linear-theory neutrino-to-cb ratio
+`P_nn / P_cb`, on the same 12-redshift by 1000-wavenumber grid as
+`pklin.gp.npz`. It backs `jet.emulator.pkmm`, which composes the total-matter
+spectrum
+
+```
+P_mm = P_cb * (f_cb + f_nu * sqrt(P_nn / P_cb))^2
+```
+
+for `mnu > 0` (and `P_mm = P_cb` otherwise). The total spectrum is what
+`Sigma8FromAs` and `spectral_equivalence_as` use; the halo mass function,
+halo bias and correlation function continue to use `P_cb`.
+
+The reference removes its one `mnu = 0` training cosmology, leaving 512 rows
+and 10 PCA components. Regenerate with
+`tools/build_pknn_ratio_bundle.py`; it verifies total-matter sigma8 against the
+reference implementation when that is importable.
 
 ## `hmf_rockstar_m200m.gp.npz`
 

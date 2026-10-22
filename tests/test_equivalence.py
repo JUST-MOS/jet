@@ -28,9 +28,12 @@ import numpy as np
 
 from jet.cosmology import Cosmology
 from jet.emulator.pklin import BUNDLE_NAME, data_dir
+from jet.emulator.pkmm import BUNDLE_NAME as RATIO_BUNDLE_NAME
 from jet.equivalence import spectral_equivalence_as, spectral_equivalence_de
 
 HAS_DATA = (data_dir() / BUNDLE_NAME).exists()
+HAS_RATIO = (data_dir() / RATIO_BUNDLE_NAME).exists()
+HAS_AS_DATA = HAS_DATA and HAS_RATIO
 HAS_CLASSY = importlib.util.find_spec("classy") is not None
 HAS_CAMB = importlib.util.find_spec("camb") is not None
 
@@ -41,9 +44,18 @@ try:
 except ImportError:  # pragma: no cover - exercised only without classy
     CLASSY_VERSION = None
 
-#: CLASS v3.2.1 is the reference environment. Other versions shift sigma8 by
-#: about ``1e-4``, so the golden comparison has to allow for that.
+try:
+    import camb
+
+    CAMB_VERSION = camb.__version__
+except ImportError:  # pragma: no cover - exercised only without camb
+    CAMB_VERSION = None
+
+#: CLASS v3.2.1 and CAMB v1.5.8 are the reference environment. Other versions
+#: shift sigma8 at the ``1e-4`` level, so the golden comparison has to allow
+#: for that.
 CLASS_AS_RTOL = 1e-6 if CLASSY_VERSION == "v3.2.1" else 2e-4
+CAMB_AS_RTOL = 1e-6 if CAMB_VERSION == "1.5.8" else 2e-4
 
 THETA_REF = np.array([0.055, 0.35140742, 63.6, 0.964, 2.082644720532909e-09, -0.42, -1.75, 0.06])
 Z_REF = np.array([0.0, 1.0, 2.0, 3.0])
@@ -74,16 +86,16 @@ W0_NML_REF = np.array(
 WA_NML_REF = np.array([-0.4999999996558018, -0.5, -0.5, -0.5])
 
 AS_CLASS_REF = np.array(
-    [2.1077675946656947e-09, 2.0860159010200809e-09, 2.0812058395218674e-09, 2.0807189407168956e-09]
+    [2.1077634239015141e-09, 2.0860134613132853e-09, 2.0811991047094874e-09, 2.0807051812419037e-09]
 )
 AS_CAMB_REF = np.array(
-    [2.1094431293975637e-09, 2.0876183723597232e-09, 2.0827715919579296e-09, 2.0822680246064327e-09]
+    [2.1096624259275386e-09, 2.0878019061616319e-09, 2.0829204075899105e-09, 2.0823880750905644e-09]
 )
 AS_CLASS_WCDM_REF = np.array(
-    [2.1357095481912250e-09, 2.0924274403239253e-09, 2.0861716420875866e-09, 2.0865311004346927e-09]
+    [2.1357033292509881e-09, 2.0924242901226188e-09, 2.0861648081789382e-09, 2.0865176427073255e-09]
 )
 AS_CAMB_WCDM_REF = np.array(
-    [2.1374072949135075e-09, 2.0940348369893869e-09, 2.0877411304431400e-09, 2.0880845114454019e-09]
+    [2.1376275039013525e-09, 2.0942182312987555e-09, 2.0878902180569408e-09, 2.0882052377292875e-09]
 )
 
 THETA_C3 = np.array([0.045, 0.28, 72.0, 0.95, 2.1e-09, -0.9, 0.3, 0.0])
@@ -94,14 +106,14 @@ THETA_C4 = np.array([0.05, 0.32, 70.0, 0.96, 2.1e-09, -1.4, 0.0, 0.0])
 Z_C4 = np.array([0.5, 1.0, 2.0])
 W_CONST_C4 = np.array([-1.4, -1.4, -1.4])
 AS_CLASS_WCDM_C4 = np.array(
-    [2.0995513037932524e-09, 2.0995525265986963e-09, 2.0995578893449495e-09]
+    [2.0995524650740926e-09, 2.0995537250375108e-09, 2.0995581564455125e-09]
 )
-AS_CAMB_WCDM_C4 = np.array([2.1000000000000002e-09, 2.0999999892060476e-09, 2.1000000000000002e-09])
+AS_CAMB_WCDM_C4 = np.array([2.1e-09, 2.1e-09, 2.1e-09])
 
 THETA_C5 = np.array([0.05, 0.31, 68.0, 0.965, 2.1e-09, -1.1, 0.2, 0.06])
 Z_C5 = np.array([0.5, 1.0, 2.0])
 W_CONST_C5 = np.array([-1.03563874, -1.02322739, -1.00631997])
-AS_EMULATOR_WCDM_C5 = np.array([2.09534020e-09, 2.09755062e-09, 2.09905872e-09])
+AS_EMULATOR_WCDM_C5 = np.array([2.0953402465e-09, 2.0975507061e-09, 2.0990589310e-09])
 
 
 class TestComovingDistance(unittest.TestCase):
@@ -216,45 +228,67 @@ class TestSpectralEquivalenceDE(unittest.TestCase):
 
 
 class TestSpectralEquivalenceAS(unittest.TestCase):
-    @unittest.skipUnless(HAS_DATA, f"{BUNDLE_NAME} is not present")
+    @unittest.skipUnless(HAS_AS_DATA, f"{BUNDLE_NAME} or {RATIO_BUNDLE_NAME} is not present")
     def test_emulator_backend(self):
         got = spectral_equivalence_as(THETA_C5, Z_C5, W_CONST_C5, sigma8_type="emulator")
         self.assertEqual(got.shape, (1, Z_C5.size))
         np.testing.assert_allclose(got[0], AS_EMULATOR_WCDM_C5, rtol=1e-6)
 
-    @unittest.skipUnless(HAS_DATA and HAS_CLASSY, f"{BUNDLE_NAME} or classy is not present")
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CLASSY, f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME} or classy is not present"
+    )
     def test_class_backend(self):
         got = spectral_equivalence_as(THETA_REF, Z_REF, W0_REF, WA_REF, sigma8_type="class")
         np.testing.assert_allclose(got[0], AS_CLASS_REF, rtol=CLASS_AS_RTOL)
 
-    @unittest.skipUnless(HAS_DATA and HAS_CAMB, f"{BUNDLE_NAME} or camb is not present")
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CAMB, f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME} or camb is not present"
+    )
     def test_camb_backend(self):
         got = spectral_equivalence_as(THETA_REF, Z_REF, W0_REF, WA_REF, sigma8_type="camb")
-        np.testing.assert_allclose(got[0], AS_CAMB_REF, rtol=1e-6)
+        np.testing.assert_allclose(got[0], AS_CAMB_REF, rtol=CAMB_AS_RTOL)
 
-    @unittest.skipUnless(HAS_DATA and HAS_CLASSY, f"{BUNDLE_NAME} or classy is not present")
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CLASSY, f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME} or classy is not present"
+    )
     def test_wcdm_class_backend(self):
         got = spectral_equivalence_as(THETA_REF, Z_REF, W_CONST_REF, sigma8_type="class")
         np.testing.assert_allclose(got[0], AS_CLASS_WCDM_REF, rtol=CLASS_AS_RTOL)
 
-    @unittest.skipUnless(HAS_DATA and HAS_CAMB, f"{BUNDLE_NAME} or camb is not present")
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CAMB, f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME} or camb is not present"
+    )
     def test_wcdm_camb_backend(self):
         got = spectral_equivalence_as(THETA_REF, Z_REF, W_CONST_REF, sigma8_type="camb")
-        np.testing.assert_allclose(got[0], AS_CAMB_WCDM_REF, rtol=1e-6)
+        np.testing.assert_allclose(got[0], AS_CAMB_WCDM_REF, rtol=CAMB_AS_RTOL)
 
     @unittest.skipUnless(HAS_DATA and HAS_CLASSY, f"{BUNDLE_NAME} or classy is not present")
     def test_out_of_bounds_falls_back_to_camb(self):
-        # w = -1.4 is outside the emulator box, so the reference uses CAMB for
-        # the auxiliary sigma8 even when the target backend is CLASS.
-        got = spectral_equivalence_as(THETA_C4, Z_C4, W_CONST_C4, sigma8_type="class")
+        # w = -1.4 is outside the emulator box, so the auxiliary sigma8 comes
+        # from CAMB even when the target backend is CLASS.
+        got = spectral_equivalence_as(
+            THETA_C4, Z_C4, W_CONST_C4, sigma8_type="class", fallback_to_camb=True
+        )
         np.testing.assert_allclose(got[0], AS_CLASS_WCDM_C4, rtol=CLASS_AS_RTOL)
 
     @unittest.skipUnless(HAS_DATA and HAS_CAMB, f"{BUNDLE_NAME} or camb is not present")
     def test_out_of_bounds_camb(self):
-        got = spectral_equivalence_as(THETA_C4, Z_C4, W_CONST_C4, sigma8_type="camb")
-        np.testing.assert_allclose(got[0], AS_CAMB_WCDM_C4, rtol=1e-6)
+        got = spectral_equivalence_as(
+            THETA_C4, Z_C4, W_CONST_C4, sigma8_type="camb", fallback_to_camb=True
+        )
+        np.testing.assert_allclose(got[0], AS_CAMB_WCDM_C4, rtol=CAMB_AS_RTOL)
 
-    @unittest.skipUnless(HAS_DATA, f"{BUNDLE_NAME} is not present")
+    @unittest.skipUnless(HAS_DATA and HAS_CAMB, f"{BUNDLE_NAME} or camb is not present")
+    def test_auxiliary_out_of_bounds_requires_fallback(self):
+        with self.assertRaises(ValueError):
+            spectral_equivalence_as(THETA_C4, Z_C4, W_CONST_C4, sigma8_type="camb")
+
+    @unittest.skipUnless(HAS_AS_DATA, f"{BUNDLE_NAME} or {RATIO_BUNDLE_NAME} is not present")
+    def test_emulator_backend_rejects_out_of_bounds(self):
+        with self.assertRaises(ValueError):
+            spectral_equivalence_as(THETA_C4, Z_C4, W_CONST_C4, sigma8_type="emulator")
+
+    @unittest.skipUnless(HAS_AS_DATA, f"{BUNDLE_NAME} or {RATIO_BUNDLE_NAME} is not present")
     def test_wa_defaults_to_zero(self):
         got = spectral_equivalence_as(THETA_C5, Z_C5, W_CONST_C5, sigma8_type="emulator")
         explicit = spectral_equivalence_as(
@@ -262,7 +296,7 @@ class TestSpectralEquivalenceAS(unittest.TestCase):
         )
         np.testing.assert_array_equal(got, explicit)
 
-    @unittest.skipUnless(HAS_DATA, f"{BUNDLE_NAME} is not present")
+    @unittest.skipUnless(HAS_AS_DATA, f"{BUNDLE_NAME} or {RATIO_BUNDLE_NAME} is not present")
     def test_batch_matches_single(self):
         z = np.array([0.3, 1.0, 2.0])
         batch_theta = np.vstack([THETA_C3, THETA_C5])

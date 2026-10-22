@@ -544,6 +544,18 @@ class TestXiHMEmulator(unittest.TestCase):
         self.assertGreater(float(ratio.min()), 0.0)
         self.assertLess(float(ratio.max()), 1e5)
 
+    def test_rejects_out_of_bounds_theta(self) -> None:
+        theta = self.theta.copy()
+        theta[0, 5] = -1.4
+        with self.assertRaises(ValueError):
+            self.emu.bias_ratio(theta)
+        with self.assertRaises(ValueError):
+            self.emu.ximm(theta, z=0.0, r=np.array([10.0]))
+        with self.assertRaises(ValueError):
+            self.emu.xihm_lgnbar_threshold(theta, z=0.0, r=np.array([10.0]), lgden=-3.0)
+        with self.assertRaises(ValueError):
+            self.emu.xihm_mass(theta, z=0.0, r=np.array([10.0]), M=np.array([1e13]))
+
     def test_golden_node_values(self) -> None:
         got = self.emu.brhm(self.theta, z=PROBE_Z, lgden=PROBE_LGDEN, r=PROBE_R)[0]
         self.assertEqual(got.shape, GOLDEN_BRHM.shape)

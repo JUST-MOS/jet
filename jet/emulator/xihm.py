@@ -278,6 +278,7 @@ def bias_ratio(theta: np.ndarray) -> np.ndarray:
         The flat bias-ratio data vector.
     """
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     return np.asarray(load_brhm_emulator().predict(theta, return_std=False))
 
 
@@ -397,6 +398,7 @@ def ximm_linear(theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray)
     from .pklin import load_pklin_emulator, log_pk_at_k
 
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     r_in = _require_positive_r(r)
 
@@ -526,6 +528,7 @@ def xihm_lgnbar_threshold(
     from .bhm import bias_lgnbar_threshold
 
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     r_in = _require_positive_r(r)
     lgden_in = np.atleast_1d(np.asarray(lgden, dtype=float))
@@ -576,6 +579,7 @@ def xihm_mass(
     from .hmf import HMFEmulator
 
     theta = np.atleast_2d(np.asarray(theta, dtype=float))
+    theta_spec().require_within_bounds(theta, name="theta")
     z_in = np.atleast_1d(np.asarray(z, dtype=float))
     r_in = _require_positive_r(r)
     M = np.atleast_1d(np.asarray(M, dtype=float))
@@ -698,6 +702,7 @@ class XiHMEmulator:
             The flat bias-ratio data vector.
         """
         theta = np.atleast_2d(np.asarray(theta, dtype=float))
+        self.x_spec.require_within_bounds(theta, name="theta")
         return np.asarray(self._emulator.predict(theta, return_std=False))
 
     def ximm(self, theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray) -> np.ndarray:

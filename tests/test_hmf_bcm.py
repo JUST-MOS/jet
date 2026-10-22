@@ -196,6 +196,14 @@ class TestBCMHFEmulator(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(got)))
         self.assertTrue(np.all(got > 0.0))
 
+    def test_rejects_out_of_bounds_parameters(self) -> None:
+        theta = PARAMETER_DEFAULTS.copy()
+        theta[0] = 20.0
+        with self.assertRaises(ValueError):
+            self.emu.cumulative(theta[None, :])
+        with self.assertRaises(ValueError):
+            self.emu.dndlgM(theta[None, :])
+
     def test_cumulative_decreases_with_mass(self) -> None:
         r"""A cumulative abundance cannot rise: :math:`n(\geq M)` falls with M."""
         got = self.emu.cumulative(PARAMETER_DEFAULTS[None, :])[0]

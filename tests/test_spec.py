@@ -180,6 +180,28 @@ class TestParameterSpec(unittest.TestCase):
         spec = ParameterSpec([Param("free")])
         self.assertEqual(spec.check_within_bounds(np.zeros((2, 1))), [])
 
+    def test_require_within_bounds_accepts_interior(self) -> None:
+        self.spec.require_within_bounds(np.array([[0.05, 0.95, 13.0]]))
+
+    def test_require_within_bounds_lists_every_violation(self) -> None:
+        X = np.array([[0.07, 0.90, 13.0]])
+        with self.assertRaises(ValueError) as caught:
+            self.spec.require_within_bounds(X, name="theta")
+        message = str(caught.exception)
+        self.assertIn("theta is outside the emulator's validity range", message)
+        self.assertIn("Omegab=0.07 outside [0.04, 0.06]", message)
+        self.assertIn("ns=0.9 outside [0.92, 1]", message)
+
+    def test_require_within_bounds_rejects_non_finite(self) -> None:
+        with self.assertRaises(ValueError):
+            self.spec.require_within_bounds(np.array([[np.nan, 0.95, 13.0]]))
+
+    def test_require_within_bounds_honours_slack(self) -> None:
+        X = np.array([[0.061, 0.95, 13.0]])
+        self.spec.require_within_bounds(X, slack=0.1)
+        with self.assertRaises(ValueError):
+            self.spec.require_within_bounds(X, slack=0.0)
+
     def test_dict_roundtrip(self) -> None:
         self.assertEqual(ParameterSpec.from_dict(self.spec.to_dict()), self.spec)
 

@@ -67,6 +67,7 @@ The double interpolation
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
@@ -74,6 +75,7 @@ import numpy as np
 from scipy.interpolate import RectBivariateSpline, UnivariateSpline, interp1d
 from scipy.special import gamma
 
+from .._boltzmann import CambPkProvider
 from ..cosmology import Cosmology
 from ..spec import DataVectorSpec, ParameterSpec
 from .emulator import Emulator, data_dir, resolve_weights_path
@@ -638,6 +640,12 @@ class HMFEmulator:
     pk_emulator : Emulator, optional
         Power-spectrum emulator for the baseline's :math:`\\sigma_{cb}`.
         Defaults to the bundled one, loaded on first use.
+    fallback_to_camb : bool, optional
+        If true, samples outside the emulator's parameter bounds are evaluated
+        with a linear CAMB CDM+baryon spectrum and the pure Castro23 baseline
+        (the emulated ratio is set to one). The default is to raise
+        :class:`ValueError`. ``ratio`` always raises; it has no analytic
+        counterpart.
 
     Notes
     -----
@@ -647,12 +655,24 @@ class HMFEmulator:
     comparison, which is why the ratio is what was emulated in the first place.
     """
 
-    def __init__(self, emulator: Emulator, pk_emulator: Emulator | None = None) -> None:
+    def __init__(
+        self,
+        emulator: Emulator,
+        pk_emulator: Emulator | None = None,
+        *,
+        fallback_to_camb: bool = False,
+    ) -> None:
         self.emulator = emulator
         self._pk_emulator = pk_emulator
+        self.fallback_to_camb = bool(fallback_to_camb)
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> HMFEmulator:
+    def load(
+        cls,
+        path: str | Path | None = None,
+        *,
+        fallback_to_camb: bool = False,
+    ) -> HMFEmulator:
         """Load the bundled emulator, or one from an explicit path.
 
         Parameters
@@ -660,6 +680,9 @@ class HMFEmulator:
         path : str or path-like, optional
             A bundle written by :mod:`tools.build_hmf_bundle`. Defaults to the
             bundled :data:`BUNDLE_NAME`, resolved against :func:`data_dir`.
+        fallback_to_camb : bool, optional
+            Policy for samples outside the emulator's parameter bounds; see
+            :class:`HMFEmulator`.
 
         Returns
         -------
@@ -667,7 +690,7 @@ class HMFEmulator:
         """
         emulator = load_hmf_emulator() if path is None else Emulator.load(path)
         emulator.warn_on_extrapolation = False
-        return cls(emulator)
+        return cls(emulator, fallback_to_camb=fallback_to_camb)
 
     # -- the pieces -----------------------------------------------------
     @property
@@ -692,7 +715,16 @@ class HMFEmulator:
         -------
         ndarray of shape (n_samples, N_BINS)
             The raw data vector. See the module docstring for its layout.
+
+        Raises
+        ------
+        ValueError
+            If ``theta`` is outside the emulator's parameter bounds. This
+            method never falls back: there is no analytic counterpart to the
+            emulated ratio.
         """
+        theta = self._validated_theta(theta)
+        self.x_spec.require_within_bounds(theta, name="theta")
         return np.asarray(self.emulator.predict(theta, return_std=False))
 
     def number_density(
@@ -715,9 +747,23 @@ class HMFEmulator:
         ndarray of shape (n_samples, n_z, n_M)
             Number density in :math:`(h/\mathrm{Mpc})^3`. Multiply by a volume
             in :math:`(\mathrm{Mpc}/h)^3` to get an expected halo count.
+
+        Raises
+        ------
+        ValueError
+            If any ``theta`` row is outside the emulator's bounds and
+            ``fallback_to_camb`` is false.
         """
         z, M = self._resolve_axes(z, M)
-        return self._per_cosmology(theta, z, M, self._cumulative_spline)
+        theta = self._validated_theta(theta)
+        out = np.empty((theta.shape[0], z.size, M.size), dtype=float)
+        fallback = self._fallback_mask(theta, "number_density")
+        inside = ~fallback
+        if np.any(inside):
+            out[inside] = self._per_cosmology(theta[inside], z, M, self._cumulative_spline)
+        if np.any(fallback):
+            out[fallback] = self._fallback_cumulative(theta[fallback], z, M)
+        return out
 
     def dndlnM(
         self, theta: np.ndarray, z: np.ndarray | None = None, M: np.ndarray | None = None
@@ -740,11 +786,92 @@ class HMFEmulator:
         -------
         ndarray of shape (n_samples, n_z, n_M)
             :math:`dn/d\ln M` in :math:`(h/\mathrm{Mpc})^3`.
+
+        Raises
+        ------
+        ValueError
+            If any ``theta`` row is outside the emulator's bounds and
+            ``fallback_to_camb`` is false.
         """
         z, M = self._resolve_axes(z, M)
-        return self._per_cosmology(theta, z, M, self._differential_spline)
+        theta = self._validated_theta(theta)
+        out = np.empty((theta.shape[0], z.size, M.size), dtype=float)
+        fallback = self._fallback_mask(theta, "dndlnM")
+        inside = ~fallback
+        if np.any(inside):
+            out[inside] = self._per_cosmology(theta[inside], z, M, self._differential_spline)
+        if np.any(fallback):
+            out[fallback] = self._fallback_dndlnm(theta[fallback], z, M)
+        return out
 
     # -- internals ------------------------------------------------------
+    def _validated_theta(self, theta) -> np.ndarray:
+        """Return ``theta`` as a finite ``(n, dim)`` array."""
+        values = np.asarray(theta, dtype=float)
+        if values.ndim == 1:
+            values = values[None, :]
+        if values.ndim != 2 or values.shape[1] != self.x_spec.dim:
+            raise ValueError(f"theta must have {self.x_spec.dim} columns, got {values.shape}")
+        if not np.all(np.isfinite(values)):
+            raise ValueError("theta must be finite")
+        return values
+
+    def _fallback_mask(self, theta: np.ndarray, method: str) -> np.ndarray:
+        """Return the out-of-bounds rows, raising or warning as configured."""
+        bounds = self.x_spec.bounds_array()
+        outside = np.any((theta < bounds[:, 0]) | (theta > bounds[:, 1]), axis=1)
+        if not np.any(outside):
+            return outside
+        if not self.fallback_to_camb:
+            self.x_spec.require_within_bounds(theta, name="theta")
+        self._warn_fallback(theta, outside, method)
+        return outside
+
+    def _warn_fallback(self, theta: np.ndarray, mask: np.ndarray, method: str) -> None:
+        """Warn once, listing every out-of-bounds parameter."""
+        violations = self.x_spec.check_within_bounds(theta[mask], slack=0.0)
+        original_rows = np.flatnonzero(mask)
+        details = []
+        for param_name, row, value in violations:
+            low, high = self.x_spec.params[self.x_spec.index(param_name)].bounds  # type: ignore[misc]
+            details.append(
+                f"row {int(original_rows[row])}: {param_name}={value:.6g} "
+                f"outside [{low:.6g}, {high:.6g}]"
+            )
+        warnings.warn(
+            f"{method}: {int(mask.sum())} sample(s) outside the emulator's "
+            "validity range; using CAMB P(k) and the pure Castro23 baseline:\n  "
+            + "\n  ".join(details),
+            UserWarning,
+            stacklevel=3,
+        )
+
+    @staticmethod
+    def _fallback_cumulative(theta: np.ndarray, z: np.ndarray, M: np.ndarray) -> np.ndarray:
+        """Pure Castro23 cumulative mass function with a CAMB P(k)."""
+        order = np.argsort(M)
+        inverse = np.argsort(order)
+        values = castro23_cumulative(
+            theta,
+            z=z,
+            M=M[order],
+            pk_emulator=CambPkProvider(),
+        )
+        return values[..., inverse] * 1e-9
+
+    @staticmethod
+    def _fallback_dndlnm(theta: np.ndarray, z: np.ndarray, M: np.ndarray) -> np.ndarray:
+        """Pure Castro23 differential mass function with a CAMB P(k)."""
+        order = np.argsort(M)
+        inverse = np.argsort(order)
+        values = castro23_dndlnM(
+            theta,
+            z=z,
+            M=M[order],
+            pk_emulator=CambPkProvider(),
+        )
+        return values[..., inverse]
+
     def _per_cosmology(self, theta, z: np.ndarray, M: np.ndarray, build) -> np.ndarray:
         """Evaluate one variant of the interpolation for every row of ``theta``.
 

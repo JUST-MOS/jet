@@ -156,10 +156,14 @@ frame = spec.frame("sigma8")
 theta_sigma8 = np.array([[0.049, 0.31, 67.66, 0.9665, 0.81, -1.0, 0.0, 0.06]])
 
 theta_as = frame.to_base(theta_sigma8)
-theta_as[0, 4]  # array(2.0845e-09)
+theta_as[0, 4]  # array(2.1025e-09)
 print(theta_as)
 theta = frame.from_base(theta_as)  # back to 0.81
 ```
+
+`sigma8` here is the **total-matter** value, including massive neutrinos. The
+inversion uses the total-matter spectrum composed in `jet.emulator.pkmm`; the
+halo mass function itself still consumes `P_cb`.
 
 ### Halo mass function with baryonic feedback
 
@@ -253,13 +257,48 @@ what needs it.
 See [`examples/xihm_example.py`](examples/xihm_example.py) for a runnable
 walkthrough.
 
+## Out-of-range parameters
+
+Every bundled cosmological emulator treats `Param.bounds` as a **validity**
+range, not merely the extent of the training sample. By default, a `theta` row
+outside those bounds raises `ValueError` and lists every offending parameter,
+rather than silently extrapolating. The same check is available directly as
+`ParameterSpec.require_within_bounds`.
+
+The strict check covers the eight cosmological columns of `theta`. The
+independent interpolation axes (`z`, `lgden`, `r`) keep their existing warning
+behaviour.
+
+Where an analytic fallback exists, it can be enabled explicitly:
+
+```python
+hmf = HMFEmulator.load(fallback_to_camb=True)
+n = hmf.number_density(theta, z=z, M=M)
+```
+
+- `HMFEmulator(..., fallback_to_camb=True)` evaluates out-of-range rows with a
+  linear CAMB CDM+baryon `P(k)` and the pure Castro23 baseline (the emulated
+  ratio is set to one). In-range rows in the same batch still use the emulator.
+  A `UserWarning` names the rows and parameters that were replaced.
+- `Sigma8FromAs(..., fallback_to_camb=True)` uses CAMB `sigma8` for
+  out-of-range rows. `to_base` checks the input and the final solution; the
+  iteration itself may explore intermediate amplitudes outside the box.
+- `spectral_equivalence_as(..., fallback_to_camb=True)` uses CAMB for an
+  auxiliary model outside the box. `sigma8_type="emulator"` is stricter: it
+  always raises when the original or auxiliary model is out of range, because
+  both sides of the ratio would be invalid.
+
+`BhmEmulator`, `XiHMEmulator` and `BCMHFEmulator` never fall back: their
+emulated quantity has no analytic counterpart that preserves its meaning, so
+an out-of-range input is always an error.
+
 ## Spectral equivalence
 
 [`jet.equivalence`](jet/equivalence.py) ports the CSST emulator's
 spectral-equivalence method. For a flat `w0waCDM` cosmology it constructs an
 auxiliary model at each redshift whose comoving distance to the last-scattering
 surface (`z* = 1100`) matches the original model, and then rescales `As` so that
-`sigma8_cb(z)` matches as well:
+the **total-matter** `sigma8(z)` (including massive neutrinos) matches as well:
 
 ```python
 import numpy as np
@@ -281,9 +320,9 @@ row or a batch of rows and always keep the sample axis, returning `(1, n_z)` or
 
 The default `sigma8_type="class"` reproduces the reference's mixed behaviour:
 the target sigma8 comes from CLASS while the auxiliary model uses the bundled
-emulator, falling back to CAMB when the auxiliary parameters leave the
-emulator's training box. `sigma8_type="emulator"` is a jet extension that uses
-the emulator for both sides and needs no Boltzmann solver. See
+total-matter emulator, falling back to CAMB when the auxiliary parameters leave
+the emulator's training box. `sigma8_type="emulator"` is a jet extension that
+uses the emulator for both sides and needs no Boltzmann solver. See
 [`examples/equivalence_example.py`](examples/equivalence_example.py) for a
 runnable walkthrough.
 
