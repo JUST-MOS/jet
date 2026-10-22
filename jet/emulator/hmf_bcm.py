@@ -262,6 +262,12 @@ class BCMHFEmulator:
     ----------
     emulator : Emulator, optional
         The fitted model. Defaults to the bundled one.
+
+    Notes
+    -----
+    The four feedback parameters must lie inside :func:`theta_spec`'s bounds;
+    an out-of-range row raises :class:`ValueError`. There is no analytic
+    baryonic baseline to fall back to.
     """
 
     def __init__(self, emulator: Emulator | None = None) -> None:

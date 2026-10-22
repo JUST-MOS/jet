@@ -32,9 +32,6 @@ _HMF_KMAX = 100.0
 #: Effective number of relativistic species used by the reference.
 _NEFF = 3.046
 
-#: Change in the relativistic species count per massive neutrino.
-_NEFF_PER_NCDM = 1.0132
-
 
 def _import_camb():
     """Import :mod:`camb`, or explain how to install it."""
@@ -193,12 +190,14 @@ def camb_matter_power(
 
 
 class CambPkProvider:
-    """A drop-in replacement for the P(k) emulator in fallback paths.
+    """A CDM+baryon P(k) provider for the halo-mass-function fallback.
 
     ``castro23_*`` and the other analytic baselines only need an object with a
     ``predict(X, return_std=False)`` method returning the flattened linear
     spectrum on the emulator's own ``12 x 1000`` grid. This provider supplies
-    that layout from CAMB, so the rest of the baseline code is unchanged.
+    that layout from CAMB using ``delta_nonu``, so the rest of the baseline
+    code is unchanged. Sigma8 fallbacks use ``delta_tot`` instead; see
+    :func:`camb_sigma8`.
     """
 
     def __init__(self, kmax: float = _HMF_KMAX) -> None:

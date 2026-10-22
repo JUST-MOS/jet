@@ -652,8 +652,9 @@ class XiHMEmulator:
         The fitted bias-ratio model. Defaults to the bundled one.
     warn_on_extrapolation : bool, optional
         Whether to warn when ``z``, ``lgden`` or ``r`` leaves the emulated box.
-        Warnings about the *cosmological* parameters are always issued by the
-        inner emulator and are not controlled here.
+        This switch does **not** cover the cosmological ``theta``: a row outside
+        the emulator's validity range always raises :class:`ValueError`, with no
+        CAMB or analytic fallback.
     """
 
     def __init__(
@@ -718,7 +719,9 @@ class XiHMEmulator:
 
         The interface has three interpolation axes and every layer of it warns
         about them, so asking a caller to silence each layer separately would be
-        a poor deal. ``warn_on_extrapolation`` therefore covers the whole stack.
+        a poor deal. ``warn_on_extrapolation`` therefore covers those warnings.
+        It never suppresses the strict ``theta`` bounds check, which raises
+        :class:`ValueError` regardless.
         """
         if self.warn_on_extrapolation:
             return function(*args, **kwargs)

@@ -6,7 +6,7 @@ The example has four parts:
    outside the P(k) emulator's training box -- distance matching does not use
    the emulator, so this is allowed;
 2. amplitude matching for a cosmology inside the training box, using the
-   bundled P(k) emulator;
+   bundled total-matter P(k) emulator;
 3. the same call on an out-of-box cosmology, which now raises ``ValueError``
    instead of silently extrapolating;
 4. the optional CAMB fallback for auxiliary models that leave the box.
@@ -15,8 +15,8 @@ Run with::
 
     python examples/spectral_equivalence_example.py
 
-The bundled P(k) weights must be present. They are distributed separately from
-git; see ``jet/data/README.md``.
+The bundled Pcb and Pnn/Pcb weights must be present for the emulator paths.
+They are distributed separately from git; see ``jet/data/README.md``.
 """
 
 import numpy as np
@@ -39,10 +39,10 @@ print("=" * 72)
 
 # The original w0/wa are outside the emulator box, but distances only need the
 # background expansion, so no emulator is involved here.
-w_const = spectral_equivalence_de(theta_reference, z_reference, wcdm=True)
+w_const, err_w = spectral_equivalence_de(theta_reference, z_reference, wcdm=True, return_error=True)
 print("auxiliary wCDM w(z):")
-for zz, value in zip(z_reference, w_const[0]):
-    print(f"  z = {zz:4.2f}   w = {value: .8f}")
+for zz, value, error in zip(z_reference, w_const[0], err_w[0]):
+    print(f"  z = {zz:4.2f}   w = {value: .8f}   |dchi|/chi = {error:.3e}")
 
 w0_eq, wa_eq, err_chi = spectral_equivalence_de(theta_reference, z_reference, return_error=True)
 print("\nauxiliary w0waCDM model:")

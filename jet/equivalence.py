@@ -23,11 +23,12 @@ Two behaviours of the reference are intentionally preserved:
    two parameters leaves a one-dimensional solution curve, so the returned
    ``(w0, wa)`` depends on the optimizer path. Do not expect a different
    solver to return the same point on that curve.
-2. In the normal amplitude path the target :math:`\\sigma_8` comes from CLASS
-   or CAMB while the auxiliary model's :math:`\\sigma_8` comes from the
-   emulator. When the auxiliary parameters leave the emulator box, the
-   reference falls back to CAMB for the auxiliary value as well. This mixed
-   behaviour is part of the reference output and is reproduced here.
+2. In the normal amplitude path the target total-matter :math:`\\sigma_8`
+   comes from CLASS or CAMB while the auxiliary model's :math:`\\sigma_8`
+   comes from the total-matter emulator composition. When the auxiliary
+   parameters leave the emulator box, the default is to raise; opt into CAMB
+   with ``fallback_to_camb=True``. The reference's mixed-backend behaviour is
+   available through that option.
 
 Parameters are passed as an eight-column ``theta`` array in the order of
 :func:`jet.cosmology.cosmo_parameter_spec`::

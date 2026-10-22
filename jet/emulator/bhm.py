@@ -629,6 +629,13 @@ class BhmEmulator:
     hmf_emulator : HMFEmulator, optional
         Mass function used for the density-to-mass inversion. Defaults to the
         bundled one.
+
+    Notes
+    -----
+    ``theta`` outside the emulator's parameter bounds always raises
+    :class:`ValueError`. The bias correction has no analytic counterpart that
+    preserves its meaning, so there is no ``fallback_to_camb`` option; the
+    ``z`` and ``lgden`` interpolation axes keep their warning behaviour.
     """
 
     def __init__(

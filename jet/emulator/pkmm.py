@@ -54,9 +54,6 @@ __all__ = [
 #: Name of the Pnn/Pcb ratio bundle under the data directory.
 BUNDLE_NAME = "pknn_ratio.gp.npz"
 
-#: Bundle key for the wavenumber grid.
-KGRID_KEY = "k"
-
 #: Converts a neutrino mass sum in eV into :math:`\Omega_\nu h^2`.
 MNU_TO_OMEGA_H2 = 1.0 / 93.14
 
@@ -155,9 +152,11 @@ class PkmmProvider:
     """A drop-in P(k) provider returning the total-matter spectrum.
 
     The interface matches :class:`jet.emulator.emulator.Emulator` closely
-    enough for :func:`jet.emulator.pklin.sigma8_of_pk` and the ``castro23_*``
-    baselines: ``predict(X, return_std=False)`` returns the flat data vector,
-    and ``x_spec`` exposes the parameter bounds.
+    enough for :func:`jet.emulator.pklin.sigma8_of_pk`: ``predict`` returns
+    the flat data vector in the same layout as the Pcb bundle, and ``x_spec``
+    exposes the parameter bounds. It is consumed by ``Sigma8FromAs`` and the
+    sigma8 path of ``spectral_equivalence_as``; the halo mass function and the
+    bias/correlation models keep using the Pcb emulator directly.
     """
 
     def __init__(self, pcb_emulator: Emulator, ratio_emulator: Emulator) -> None:
@@ -171,7 +170,7 @@ class PkmmProvider:
 
     @property
     def y_spec(self):
-        """Output specification of the Pcb data vector."""
+        """Output specification of the shared Pcb/Pmm data-vector layout."""
         return self.pcb_emulator.y_spec
 
     def predict(self, X: np.ndarray, return_std: bool = False) -> np.ndarray:

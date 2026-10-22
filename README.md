@@ -35,8 +35,8 @@ pip install jet              # numpy + scipy
 pip install jet[gp]          # + scikit-learn, for Gaussian-process training
 pip install jet[nn]          # + PyTorch, for neural-network training
 pip install jet[inf]         # + emcee, for inference
-pip install jet[class]       # + CLASS, for spectral-equivalence sigma8 targets
-pip install jet[camb]        # + CAMB, for spectral-equivalence sigma8 targets
+pip install jet[class]       # + CLASS, for total-matter sigma8 targets
+pip install jet[camb]        # + CAMB, for sigma8 and out-of-range fallbacks
 pip install jet[boltzmann]   # + both Boltzmann solvers
 pip install jet[all]         # everything
 ```
@@ -241,9 +241,11 @@ Four things are worth knowing before using it:
 - **`z`, `lgden` and `r` are interpolation axes, not emulator axes.** The
   Gaussian process sees the eight cosmological parameters only; the other three
   are handled afterwards by linear interpolation of the box, linear in
-  `log10(r)`. Asking for a point outside the box warns and extrapolates rather
-  than raising. Set `XiHMEmulator(warn_on_extrapolation=False)` to silence the
-  whole stack at once.
+  `log10(r)`. Asking for a point outside the box on these three axes warns and
+  extrapolates rather than raising; set
+  `XiHMEmulator(warn_on_extrapolation=False)` to silence them. The eight
+  cosmological parameters are different: an out-of-range `theta` always raises
+  `ValueError`.
 - **Density threshold and mass threshold are different samples.** Holding
   `n(>=M)` fixed and varying `M` is not the same selection as the reverse, so
   `xihm_mass` converts by a finite difference in `log10(n)`, weighted by the
@@ -280,9 +282,10 @@ n = hmf.number_density(theta, z=z, M=M)
   linear CAMB CDM+baryon `P(k)` and the pure Castro23 baseline (the emulated
   ratio is set to one). In-range rows in the same batch still use the emulator.
   A `UserWarning` names the rows and parameters that were replaced.
-- `Sigma8FromAs(..., fallback_to_camb=True)` uses CAMB `sigma8` for
-  out-of-range rows. `to_base` checks the input and the final solution; the
-  iteration itself may explore intermediate amplitudes outside the box.
+- `Sigma8FromAs(..., fallback_to_camb=True)` uses CAMB total-matter `sigma8`
+  (`delta_tot`) for out-of-range rows. `to_base` checks the input and the final
+  solution; the iteration itself may explore intermediate amplitudes outside
+  the box.
 - `spectral_equivalence_as(..., fallback_to_camb=True)` uses CAMB for an
   auxiliary model outside the box. `sigma8_type="emulator"` is stricter: it
   always raises when the original or auxiliary model is out of range, because

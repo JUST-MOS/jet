@@ -642,10 +642,12 @@ class HMFEmulator:
         Defaults to the bundled one, loaded on first use.
     fallback_to_camb : bool, optional
         If true, samples outside the emulator's parameter bounds are evaluated
-        with a linear CAMB CDM+baryon spectrum and the pure Castro23 baseline
-        (the emulated ratio is set to one). The default is to raise
-        :class:`ValueError`. ``ratio`` always raises; it has no analytic
-        counterpart.
+        with a linear CAMB CDM+baryon spectrum (``delta_nonu``) and the pure
+        Castro23 baseline (the emulated ratio is set to one). The default is
+        to raise :class:`ValueError`. ``ratio`` always raises; it has no
+        analytic counterpart. This is the halo-mass-function path only;
+        sigma8 uses ``delta_tot`` and the total-matter composition in
+        :mod:`jet.emulator.pkmm`.
 
     Notes
     -----
@@ -848,7 +850,7 @@ class HMFEmulator:
 
     @staticmethod
     def _fallback_cumulative(theta: np.ndarray, z: np.ndarray, M: np.ndarray) -> np.ndarray:
-        """Pure Castro23 cumulative mass function with a CAMB P(k)."""
+        """Pure Castro23 cumulative function with CAMB CDM+baryon P(k)."""
         order = np.argsort(M)
         inverse = np.argsort(order)
         values = castro23_cumulative(
@@ -861,7 +863,7 @@ class HMFEmulator:
 
     @staticmethod
     def _fallback_dndlnm(theta: np.ndarray, z: np.ndarray, M: np.ndarray) -> np.ndarray:
-        """Pure Castro23 differential mass function with a CAMB P(k)."""
+        """Pure Castro23 differential function with CAMB CDM+baryon P(k)."""
         order = np.argsort(M)
         inverse = np.argsort(order)
         values = castro23_dndlnM(

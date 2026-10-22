@@ -20,7 +20,8 @@ The subset is deliberately small:
 ``comoving_distance(z)``
     The line-of-sight comoving distance in Mpc, using the reference's shared
     log-spaced scale-factor grid and cubic interpolation. The neutrino-split
-    transformation and CAMB fallbacks remain out of scope.
+    transformation is not part of this class; optional CAMB fallbacks live in
+    :mod:`jet._boltzmann` and the emulator wrappers that opt into them.
 
 Neutrino density
 ----------------
