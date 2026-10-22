@@ -35,6 +35,9 @@ pip install jet              # numpy + scipy
 pip install jet[gp]          # + scikit-learn, for Gaussian-process training
 pip install jet[nn]          # + PyTorch, for neural-network training
 pip install jet[inf]         # + emcee, for inference
+pip install jet[class]       # + CLASS, for spectral-equivalence sigma8 targets
+pip install jet[camb]        # + CAMB, for spectral-equivalence sigma8 targets
+pip install jet[boltzmann]   # + both Boltzmann solvers
 pip install jet[all]         # everything
 ```
 
@@ -250,6 +253,40 @@ what needs it.
 See [`examples/xihm_example.py`](examples/xihm_example.py) for a runnable
 walkthrough.
 
+## Spectral equivalence
+
+[`jet.equivalence`](jet/equivalence.py) ports the CSST emulator's
+spectral-equivalence method. For a flat `w0waCDM` cosmology it constructs an
+auxiliary model at each redshift whose comoving distance to the last-scattering
+surface (`z* = 1100`) matches the original model, and then rescales `As` so that
+`sigma8_cb(z)` matches as well:
+
+```python
+import numpy as np
+from jet.equivalence import spectral_equivalence_as, spectral_equivalence_de
+
+# Omegab, Omegam, H0, ns, As, w0, wa, mnu
+theta = np.array([0.05, 0.31, 68.0, 0.965, 2.1e-9, -1.1, 0.2, 0.06])
+z = np.array([0.5, 1.0, 2.0])
+
+w_const = spectral_equivalence_de(theta, z, wcdm=True)
+w0, wa, err = spectral_equivalence_de(theta, z, return_error=True)
+As_eq = spectral_equivalence_as(theta, z, w0, wa, sigma8_type="emulator")
+```
+
+`Omegam` is baryons plus cold dark matter, excluding massive neutrinos, and
+`As` is the physical amplitude. Both functions accept a single eight-column
+row or a batch of rows and always keep the sample axis, returning `(1, n_z)` or
+`(n, n_z)`.
+
+The default `sigma8_type="class"` reproduces the reference's mixed behaviour:
+the target sigma8 comes from CLASS while the auxiliary model uses the bundled
+emulator, falling back to CAMB when the auxiliary parameters leave the
+emulator's training box. `sigma8_type="emulator"` is a jet extension that uses
+the emulator for both sides and needs no Boltzmann solver. See
+[`examples/equivalence_example.py`](examples/equivalence_example.py) for a
+runnable walkthrough.
+
 ## Repository layout
 
 ```
@@ -258,6 +295,7 @@ jet/
 │   ├── spec.py             # ParameterSpec / DataVectorSpec, shared by all stages
 │   ├── derived.py          # derived parameters: sigma8 <- As, h <- H0
 │   ├── cosmology.py        # background expansion the ported physics needs
+│   ├── equivalence.py      # spectral equivalence: distance and sigma8 matching
 │   ├── fourier.py          # FFTLog Hankel transforms (P(k) <-> xi(r))
 │   ├── emulator/           # transforms, backends, bundle format, metrics
 │   │   ├── pklin.py        # reader for the bundled linear-theory P(k) emulator
@@ -278,7 +316,8 @@ jet/
 ├── examples/               # usage notebooks
 │   ├── hmf.ipynb           #   halo mass function quick start
 │   ├── hmf_bcm_example.py  #   baryonic mass function quick start
-│   └── xihm_example.py     #   halo-matter bias ratio quick start
+│   ├── xihm_example.py     #   halo-matter bias ratio quick start
+│   └── equivalence_example.py  # distance and sigma8 matching quick start
 ├── environment.yml         # shared development environment (conda + pip)
 ├── VERSION                 # single source of truth for the version (bump2version-owned)
 ├── .bumpversion.cfg        # version bump configuration

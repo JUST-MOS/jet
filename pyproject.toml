@@ -28,8 +28,12 @@ nn = ["torch"]
 inf = ["emcee"]
 # HDF5 and other on-disk catalogs for jet.catalog / jet.estimator.
 io = ["h5py"]
+# Optional Boltzmann solvers for the sigma8 targets in jet.equivalence.
+class = ["classy"]
+camb = ["camb"]
+boltzmann = ["classy", "camb"]
 # Everything, for development and for running the full pipeline.
-all = ["jet[gp,nn,inf,io]"]
+all = ["jet[gp,nn,inf,io,boltzmann]"]
 test = ["pytest", "pytest-cov"]
 
 [project.urls]
