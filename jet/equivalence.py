@@ -109,6 +109,9 @@ _FALLBACK_WARNING = r"(Sigma8FromAs|spectral_equivalence_as).*using CAMB sigma8"
 #: Relative distance mismatch above which the facade reports a warning.
 _DISTANCE_ERROR_WARNING = 1e-6
 
+#: Absolute redshift tolerance for reusing a cached auxiliary model.
+_Z_CACHE_TOLERANCE = 1e-6
+
 
 @contextmanager
 def _quiet_expected_fallbacks(enabled: bool):
@@ -975,6 +978,10 @@ class EquivalentCosmology:
     methods raise a :class:`ValueError` in that case, because BHM and XiHM have
     no fallback.
 
+    Auxiliary rows are cached per redshift. Requested redshifts within
+    ``1e-6`` of a cached value reuse that entry, so floating-point round-off
+    does not trigger a second equivalence solve.
+
     Expected CAMB-fallback ``UserWarning``s from the internal sigma8 helpers
     are suppressed. Solver ``RuntimeWarning``s and the downstream emulators'
     own warnings are not.
@@ -1177,12 +1184,36 @@ class EquivalentCosmology:
                 )
             self._aux_cache[float(zz)] = row
 
+    def _cached_row(self, z: float) -> np.ndarray | None:
+        """Return the cached auxiliary row closest to ``z`` within tolerance."""
+        if not self._aux_cache:
+            return None
+        key = min(self._aux_cache, key=lambda cached: abs(cached - z))
+        if abs(key - z) <= _Z_CACHE_TOLERANCE:
+            return self._aux_cache[key]
+        return None
+
     def _theta_rows(self, z_values: np.ndarray) -> np.ndarray:
         """Return one auxiliary theta row per requested redshift."""
-        missing = [float(zz) for zz in np.unique(z_values) if float(zz) not in self._aux_cache]
+        missing: list[float] = []
+        for zz in np.unique(z_values):
+            z = float(zz)
+            if self._cached_row(z) is not None:
+                continue
+            # Do not compute two near-identical redshifts in the same call.
+            if any(abs(z - other) <= _Z_CACHE_TOLERANCE for other in missing):
+                continue
+            missing.append(z)
         if missing:
             self._compute_rows(np.asarray(missing, dtype=float))
-        return np.stack([self._aux_cache[float(zz)] for zz in z_values], axis=0)
+
+        rows = []
+        for zz in z_values:
+            row = self._cached_row(float(zz))
+            if row is None:  # pragma: no cover - guarded by the fill above
+                raise RuntimeError(f"internal error: no auxiliary theta cached for z={float(zz):g}")
+            rows.append(row)
+        return np.stack(rows, axis=0)
 
     def _auxiliary_rows(self, z_values: np.ndarray, method: str) -> np.ndarray:
         """Return auxiliary rows, refusing an out-of-box downstream call."""
