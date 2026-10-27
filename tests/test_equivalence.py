@@ -410,6 +410,26 @@ class TestEquivalentCosmology(unittest.TestCase):
         with self.assertRaises(ValueError):
             cosmo.theta_at([0.0, 1.0])
 
+    def test_z_cache_reuses_redshifts_within_tolerance(self):
+        cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
+        first = cosmo.theta([0.5])
+        self.assertEqual(len(cosmo._aux_cache), 1)
+
+        # Within 1e-6: reuse the existing row without adding a cache entry.
+        near = cosmo.theta([0.5 + 5e-7])
+        self.assertEqual(len(cosmo._aux_cache), 1)
+        np.testing.assert_array_equal(near[0], first[0])
+
+        # Both values in one call also share a single cache entry.
+        both = cosmo.theta([0.7, 0.7 + 5e-7])
+        self.assertEqual(len(cosmo._aux_cache), 2)
+        np.testing.assert_array_equal(both[0], both[1])
+
+        # Outside the tolerance: a distinct entry is computed.
+        far = cosmo.theta([0.5 + 2e-6])
+        self.assertEqual(len(cosmo._aux_cache), 3)
+        self.assertEqual(far.shape, (1, 8))
+
     def test_z_outside_the_emulator_grid_raises(self):
         cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
         with self.assertRaises(ValueError):
