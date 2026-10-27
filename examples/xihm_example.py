@@ -1,10 +1,11 @@
 """Quick look at the bundled halo-matter correlation function.
 
 ``XiHMEmulator`` composes four things: an emulated bias *ratio*, a linear matter
-correlation function from the bundled P(k) via FFTLog, a linear-bias baseline
-that takes over at large separations, and a blend between the two. The first
-panel below shows the emulated ratio -- flat in r by construction, since the
-scale dependence lives in ``xi_mm`` -- and the second the composed answer, where
+correlation function from the bundled P_cb(k) via FFTLog, a linear-bias
+baseline that takes over at large separations, and a blend between the two.
+The first panel below shows the emulated ratio -- flat in r by construction,
+since the scale dependence lives in ``xi_cb`` -- and the second the composed
+answer, where
 the turnover past ~40 Mpc/h is the baseline taking over.
 
 Run with ``MPLBACKEND=Agg`` on a machine without a display. Uses matplotlib,
@@ -32,7 +33,7 @@ fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 ax = axes[0]
 for lgden in LGDEN_GRID:
     ax.loglog(r, emu.brhm(theta, z=0.0, lgden=lgden, r=r)[0, 0, 0, :], label=f"{lgden:.1f}")
-ax.set(xlabel="r  [Mpc/h]", ylabel="xi_hm / xi_mm", title="emulated ratio, z = 0")
+ax.set(xlabel="r  [Mpc/h]", ylabel="xi_hm / xi_cb", title="emulated ratio, z = 0")
 ax.legend(title=r"log10 n(>=M)", fontsize=7, title_fontsize=7)
 ax.grid(True, which="both", alpha=0.3)
 
@@ -49,13 +50,13 @@ ax.set(xlabel="r  [Mpc/h]", ylabel="xi_hm", title="correlation function, z = 0")
 ax.legend(title=r"log10 n(>=M)", fontsize=7, title_fontsize=7)
 ax.grid(True, which="both", alpha=0.3)
 
-# Right: the same at a fixed threshold, across redshift, against xi_mm.
+# Right: the same at a fixed threshold, across redshift, against xi_cb.
 ax = axes[2]
 for z in (0.0, 1.0, 3.0):
     ax.loglog(
         r, emu.xihm_lgnbar_threshold(theta, z=z, r=r, lgden=-4.0)[0, 0, 0, :], label=f"z = {z}"
     )
-ax.loglog(r, emu.ximm(theta, z=0.0, r=r)[0, 0, :], "k--", lw=1, label="xi_mm, z = 0")
+ax.loglog(r, emu.ximm_linear(theta, z=0.0, r=r)[0, 0, :], "k--", lw=1, label="xi_cb, z = 0")
 ax.set(xlabel="r  [Mpc/h]", ylabel="xi", title=r"log10 n(>=M) = -4.0")
 ax.legend(fontsize=7)
 ax.grid(True, which="both", alpha=0.3)

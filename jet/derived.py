@@ -349,8 +349,11 @@ class Sigma8FromAs(Conversion):
     fallback_to_camb : bool, optional
         Policy for inputs outside the P(k) emulator's parameter bounds. The
         default raises :class:`ValueError`. When true, :math:`\\sigma_8` is
-        obtained from a linear CAMB CDM+baryon spectrum instead, and a
-        :class:`UserWarning` names the offending parameters.
+        obtained from a linear CAMB **total-matter** spectrum (``delta_tot``)
+        instead, and a :class:`UserWarning` names the offending parameters.
+        This matches the emulator's total-matter definition, which includes
+        massive neutrinos; the halo mass function's fallback uses
+        ``delta_nonu`` (CDM+baryon) instead.
     """
 
     kind = "sigma8_as"

@@ -11,14 +11,15 @@ The bundled Gaussian process does *not* predict :math:`\xi_{hm}`. It predicts
 the **effective bias ratio**
 
 .. math::
-    B_{hm}(r \mid z, \lg\bar{n}) = \frac{\xi_{hm}(r)}{\xi_{mm}(r)}
+    B_{hm}(r \mid z, \lg\bar{n}) = \frac{\xi_{hm}(r)}{\xi_{cb}(r)}
 
 on a fixed box, and the physical correlation function is formed by multiplying
-by a matter correlation function the caller supplies. The reason is that the
-ratio is a far smoother function of cosmology than either factor: the
-cosmological dependence of :math:`\xi_{mm}` is already carried by the linear
-power spectrum, and leaving it inside the regression would make the emulator
-relearn it at every :math:`r`. The reference implementation does the same, and
+by the linear CDM+baryon correlation function the caller supplies. The reason
+is that the ratio is a far smoother function of cosmology than either factor:
+the cosmological dependence of :math:`\xi_{cb}` is already carried by the
+linear :math:`P_{cb}(k)` spectrum, and leaving it inside the regression would
+make the emulator relearn it at every :math:`r`. The reference implementation
+does the same, and
 :meth:`XiHMEmulator.xihm_lgnbar_threshold` is where the multiplication, the
 large-scale linear-bias baseline and the blend between them happen.
 
@@ -123,11 +124,11 @@ N_BINS = N_Z * N_LGDEN * N_R
 R_SWITCH = 40.0
 
 #: Wavenumbers the linear power spectrum is sampled at before the transform to
-#: :math:`\xi_{mm}`. The reference's 512 points, not the emulator's own grid:
+#: :math:`\xi_{cb}`. The reference's 512 points, not the emulator's own grid:
 #: the resampling is part of the number being reproduced.
 XIMM_K = np.logspace(-4.99, 1.99, 512)
 
-#: Wavenumbers the FFTLog transform to :math:`\xi_{mm}` actually runs on.
+#: Wavenumbers the FFTLog transform to :math:`\xi_{cb}` actually runs on.
 XIMM_KFFT = np.logspace(-5, 5, 1024)
 
 #: Wavenumbers the baseline's transform runs on. Wider than
@@ -369,7 +370,7 @@ def _require_positive_r(r: np.ndarray) -> np.ndarray:
 
 
 def ximm_linear(theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray) -> np.ndarray:
-    r"""Return the linear matter correlation function :math:`\xi_{mm}(r, z)`.
+    r"""Return the linear CDM+baryon correlation function :math:`\xi_{cb}(r, z)`.
 
     The Hankel transform of the bundled linear :math:`P_{cb}(k)`, on the
     reference's own two grids: the emulator is sampled at 512 wavenumbers, the
@@ -390,7 +391,17 @@ def ximm_linear(theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray)
     Returns
     -------
     ndarray of shape (n_samples, n_z, n_r)
-        :math:`\xi_{mm}`, dimensionless.
+        :math:`\xi_{cb}`, dimensionless.
+
+    Notes
+    -----
+    This is the correlation function of the **CDM+baryon** spectrum
+    :math:`P_{cb}`, not the total-matter spectrum including massive
+    neutrinos. When ``mnu = 0`` the two coincide; for ``mnu > 0`` this is
+    :math:`\xi_{cb}`, not :math:`\xi_{mm}`. Total-matter sigma8 uses the
+    :math:`P_{nn}/P_{cb}` composition in :mod:`jet.emulator.pkmm`; that
+    composition is deliberately not applied here, because the halo mass
+    function, bias and correlation function continue to use :math:`P_{cb}`.
     """
     from scipy.interpolate import InterpolatedUnivariateSpline, interp1d
 
@@ -430,9 +441,9 @@ def _tree_baseline(theta: np.ndarray, z: np.ndarray, r: np.ndarray, bias: np.nda
     r"""Return the linear-bias baseline for a set of halo samples.
 
     A halo sample biased by :math:`b` traces the matter field linearly at large
-    separations, so :math:`\xi_{hm} = b\,\xi_{mm}` there. This computes it the
+    separations, so :math:`\xi_{hm} = b\,\xi_{cb}` there. This computes it the
     long way round -- :math:`b \times P_{\mathrm{lin}}`, Hankel-transformed --
-    rather than as :math:`b \times \xi_{mm}`, because that is what the reference
+    rather than as :math:`b \times \xi_{cb}`, because that is what the reference
     does and because the two differ by more than round-off: the transform here
     runs on a different k grid, with power-law extrapolation, so its answer
     carries a different truncation error.
@@ -706,10 +717,14 @@ class XiHMEmulator:
         self.x_spec.require_within_bounds(theta, name="theta")
         return np.asarray(self._emulator.predict(theta, return_std=False))
 
-    def ximm(self, theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray) -> np.ndarray:
-        r"""Return the linear matter correlation function :math:`\xi_{mm}`.
+    def ximm_linear(
+        self, theta: np.ndarray, z: float | np.ndarray, r: float | np.ndarray
+    ) -> np.ndarray:
+        r"""Return the linear CDM+baryon correlation function :math:`\xi_{cb}`.
 
-        See :func:`ximm_linear`. Needs no bundled bias weights, only the linear
+        This is the Hankel transform of the bundled :math:`P_{cb}(k)`, not the
+        total-matter spectrum including massive neutrinos; see
+        :func:`ximm_linear`. It needs no bundled bias weights, only the linear
         power spectrum.
         """
         return self._run(ximm_linear, theta, z=z, r=r)

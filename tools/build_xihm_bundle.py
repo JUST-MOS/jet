@@ -528,7 +528,7 @@ def _verify_xihm_physics(path: Path, source: Path) -> None:
         worst_ximm = max(
             worst_ximm,
             _worst_relative(
-                emulator.ximm(theta, z=z_probe, r=r_probe)[0],
+                emulator.ximm_linear(theta, z=z_probe, r=r_probe)[0],
                 probe.get_ximmlinear(z=z_probe, r=r_probe),
             ),
         )

@@ -67,7 +67,7 @@ def _camb_params(theta_row: np.ndarray, kmax: float, redshifts: np.ndarray):
     )
     params.InitPower.set_params(ns=ns, As=As)
     params.set_dark_energy(w=w0, wa=wa, dark_energy_model="ppf")
-    params.set_matter_power(kmax=kmax, redshifts=np.atleast_1d(redshifts))
+    params.set_matter_power(kmax=kmax, redshifts=np.atleast_1d(redshifts), silent=True)
     # Only the matter transfer is needed. Disabling the CMB spectra also skips
     # CAMB's lensing sanity check, which rejects the large A_s values that a
     # high-sigma8 inversion can visit before it converges.

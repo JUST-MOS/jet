@@ -428,7 +428,7 @@ class TestXimmLinear(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(got)))
 
     def test_is_positive_on_the_scales_the_transform_resolves(self) -> None:
-        """xi_mm is positive below the baryon acoustic scale's turnover region."""
+        """xi_cb is positive below the baryon acoustic scale's turnover region."""
         from jet.emulator.xihm import ximm_linear
 
         got = ximm_linear(self.theta, z=0.0, r=np.logspace(-1.5, 0.5, 8))[0, 0]
@@ -487,11 +487,11 @@ class TestXihm(unittest.TestCase):
                 self.theta, z=0.0, r=[radius], lgden=LGDEN_GRID[2:4]
             )[0]
             ratio = self.emu.brhm(self.theta, z=0.0, lgden=LGDEN_GRID[2:4], r=[radius])[0]
-            ximm = self.emu.ximm(self.theta, z=0.0, r=[radius])[0, 0, 0]
+            ximm = self.emu.ximm_linear(self.theta, z=0.0, r=[radius])[0, 0, 0]
             np.testing.assert_allclose(got[:, 0, 0], ratio[:, 0, 0] * ximm, rtol=1e-4)
 
     def test_far_out_the_ratio_approaches_the_linear_bias(self) -> None:
-        r"""At large :math:`r`, :math:`\xi_{hm}/\xi_{mm} \to b`.
+        r"""At large :math:`r`, :math:`\xi_{hm}/\xi_{cb} \to b`.
 
         That is the point of the blend, and it is checkable without the
         reference because all three quantities are exposed. Measured, it holds
@@ -505,11 +505,11 @@ class TestXihm(unittest.TestCase):
                 got = self.emu.xihm_lgnbar_threshold(
                     self.theta, z=0.0, r=[radius], lgden=LGDEN_GRID[2:4]
                 )[0, :, 0, 0]
-                ximm = self.emu.ximm(self.theta, z=0.0, r=[radius])[0, 0, 0]
+                ximm = self.emu.ximm_linear(self.theta, z=0.0, r=[radius])[0, 0, 0]
                 bias = self.emu.bias_lgnbar_threshold(self.theta, z=0.0, lgden=LGDEN_GRID[2:4])[
                     0, 0
                 ]
-                # Both xi_hm and xi_mm are negative beyond the BAO peak, so the
+                # Both xi_hm and xi_cb are negative beyond the BAO peak, so the
                 # ratio is positive and the comparison is sign-preserving.
                 np.testing.assert_allclose(got / ximm, bias, rtol=1e-2)
         finally:
@@ -550,7 +550,7 @@ class TestXiHMEmulator(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.emu.bias_ratio(theta)
         with self.assertRaises(ValueError):
-            self.emu.ximm(theta, z=0.0, r=np.array([10.0]))
+            self.emu.ximm_linear(theta, z=0.0, r=np.array([10.0]))
         with self.assertRaises(ValueError):
             self.emu.xihm_lgnbar_threshold(theta, z=0.0, r=np.array([10.0]), lgden=-3.0)
         with self.assertRaises(ValueError):
