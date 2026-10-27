@@ -28,13 +28,14 @@ from __future__ import annotations
 
 import importlib.util
 import unittest
+import warnings
 
 import numpy as np
 
 from jet.cosmology import Cosmology
 from jet.emulator.pklin import BUNDLE_NAME, data_dir
 from jet.emulator.pkmm import BUNDLE_NAME as RATIO_BUNDLE_NAME
-from jet.equivalence import spectral_equivalence_as, spectral_equivalence_de
+from jet.equivalence import EquivalentCosmology, spectral_equivalence_as, spectral_equivalence_de
 
 HAS_DATA = (data_dir() / BUNDLE_NAME).exists()
 HAS_RATIO = (data_dir() / RATIO_BUNDLE_NAME).exists()
@@ -370,6 +371,153 @@ class TestSpectralEquivalenceAS(unittest.TestCase):
     def test_theta_must_be_two_dimensional_or_flat(self):
         with self.assertRaises(ValueError):
             spectral_equivalence_as(np.ones((1, 2, 8)), Z_REF, W0_REF)
+
+
+class TestEquivalentCosmology(unittest.TestCase):
+    """The high-level facade: pass-through, out-of-box mapping, strict stats."""
+
+    THETA_IN_BOX = np.array([0.055, 0.35140742, 63.6, 0.964, 2.08e-9, -1.0, 0.0, 0.06])
+    THETA_SIGMA8 = np.array([0.055, 0.35140742, 63.6, 0.964, 0.781, -0.42, -1.75, 0.06])
+    THETA_EDGE = np.array([0.055, 0.35140742, 63.6, 0.964, 0.8544, -0.42, -1.75, 0.06])
+    Z_MAIN = np.array([0.0, 0.5, 1.0])
+
+    def test_rejects_batch_theta(self):
+        with self.assertRaises(ValueError):
+            EquivalentCosmology(np.vstack([self.THETA_IN_BOX, self.THETA_IN_BOX]), use_sigma8=False)
+
+    def test_rejects_non_de_out_of_bounds(self):
+        theta = self.THETA_IN_BOX.copy()
+        theta[0] = 0.1
+        with self.assertRaises(ValueError):
+            EquivalentCosmology(theta, use_sigma8=False)
+
+    def test_requires_positive_sigma8(self):
+        theta = self.THETA_SIGMA8.copy()
+        theta[4] = -0.1
+        with self.assertRaises(ValueError):
+            EquivalentCosmology(theta, use_sigma8=True)
+
+    def test_in_box_theta_passes_through(self):
+        cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
+        self.assertFalse(cosmo.needs_equivalence)
+        rows = cosmo.theta(z=[0.0, 0.5])
+        self.assertEqual(rows.shape, (2, 8))
+        np.testing.assert_array_equal(rows, np.broadcast_to(self.THETA_IN_BOX, (2, 8)))
+        np.testing.assert_array_equal(cosmo.theta_at(0.0), self.THETA_IN_BOX)
+
+    def test_theta_at_requires_a_scalar(self):
+        cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
+        with self.assertRaises(ValueError):
+            cosmo.theta_at([0.0, 1.0])
+
+    def test_z_outside_the_emulator_grid_raises(self):
+        cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
+        with self.assertRaises(ValueError):
+            cosmo.theta(3.5)
+        with self.assertRaises(ValueError):
+            cosmo.number_density(z=[0.0, 3.5])
+
+    def test_missing_statistic_selection_raises(self):
+        cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
+        with self.assertRaises(ValueError):
+            cosmo.bias_mass(z=0.0)
+        with self.assertRaises(ValueError):
+            cosmo.xihm_mass(z=0.0, M=np.array([1e13]))
+        with self.assertRaises(ValueError):
+            cosmo.xihm_lgnbar_threshold(z=0.0, lgden=np.array([-3.0]))
+
+    def test_input_theta_and_theta_as_properties(self):
+        cosmo = EquivalentCosmology(self.THETA_IN_BOX, use_sigma8=False)
+        np.testing.assert_array_equal(cosmo.input_theta, self.THETA_IN_BOX)
+        np.testing.assert_array_equal(cosmo.theta_as, self.THETA_IN_BOX)
+
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CAMB,
+        f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME}, or camb is not available",
+    )
+    def test_main_example_is_silent_and_stays_in_box(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cosmo = EquivalentCosmology(self.THETA_SIGMA8, use_sigma8=True)
+            theta = cosmo.theta(self.Z_MAIN)
+        self.assertEqual(caught, [])
+        self.assertTrue(cosmo.needs_equivalence)
+        self.assertEqual(theta.shape, (3, 8))
+        self.assertTrue(np.all((theta[:, 4] >= 1.7e-9) & (theta[:, 4] <= 2.5e-9)))
+        self.assertTrue(np.all((theta[:, 5] >= -1.3) & (theta[:, 5] <= -0.7)))
+        self.assertTrue(np.all((theta[:, 6] >= -0.5) & (theta[:, 6] <= 0.5)))
+        np.testing.assert_array_equal(
+            theta[:, [0, 1, 2, 3, 7]],
+            np.broadcast_to(self.THETA_SIGMA8[[0, 1, 2, 3, 7]], (3, 5)),
+        )
+        np.testing.assert_allclose(
+            theta[:, 4],
+            np.array([2.10775353e-09, 2.09449792e-09, 2.08590997e-09]),
+            rtol=2e-3,
+        )
+        np.testing.assert_array_equal(cosmo.theta_at(0.0), theta[0])
+
+        # The direct statistics also stay inside the box and stay silent.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            n = cosmo.number_density(z=self.Z_MAIN, M=np.array([1e13, 1e14]))
+        self.assertEqual(caught, [])
+        self.assertEqual(n.shape, (3, 2))
+
+    @unittest.skipUnless(HAS_DATA, f"{BUNDLE_NAME} is not present")
+    def test_in_box_direct_hmf_matches_low_level(self):
+        from jet.emulator.hmf import HMFEmulator
+
+        theta = self.THETA_IN_BOX
+        z = np.array([0.0, 0.5])
+        M = np.array([1e13, 1e14])
+        got = EquivalentCosmology(theta, use_sigma8=False).number_density(z=z, M=M)
+        expected = HMFEmulator.load().number_density(theta, z=z, M=M)[0]
+        np.testing.assert_allclose(got, expected, rtol=1e-10, atol=0.0)
+
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CAMB,
+        f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME}, or camb is not available",
+    )
+    def test_auxiliary_as_out_of_box_can_use_hmf_fallback(self):
+        from jet.emulator.hmf import HMFEmulator
+
+        cosmo = EquivalentCosmology(self.THETA_EDGE, use_sigma8=True)
+        theta_eq = cosmo.theta_at(0.0)
+        self.assertGreater(theta_eq[4], 2.5e-9)
+
+        M = np.array([1e13])
+        with self.assertRaises(ValueError):
+            cosmo.number_density(z=0.0, M=M)
+
+        hmf = HMFEmulator.load(fallback_to_camb=True)
+        with self.assertWarns(UserWarning):
+            n = hmf.number_density(theta_eq, z=0.0, M=M)
+        self.assertEqual(n.shape, (1, 1, 1))
+        self.assertTrue(np.all(np.isfinite(n)))
+
+    @unittest.skipUnless(HAS_AS_DATA, f"{BUNDLE_NAME} or {RATIO_BUNDLE_NAME} is not present")
+    def test_fallback_false_raises_for_out_of_box_input(self):
+        with self.assertRaises(ValueError):
+            EquivalentCosmology(self.THETA_SIGMA8, use_sigma8=True, fallback_to_camb=False)
+
+    @unittest.skipUnless(
+        HAS_AS_DATA and HAS_CAMB,
+        f"{BUNDLE_NAME}, {RATIO_BUNDLE_NAME}, or camb is not available",
+    )
+    def test_direct_statistics_keep_the_z_axis_first(self):
+        cosmo = EquivalentCosmology(self.THETA_SIGMA8, use_sigma8=True)
+        M = np.array([1e13, 1e14])
+        r = np.array([1.0, 10.0])
+        lgden = np.array([-3.0, -2.5])
+
+        self.assertEqual(cosmo.number_density(z=0.0, M=M).shape, (1, 2))
+        self.assertEqual(cosmo.dndlnM(z=0.0, M=M).shape, (1, 2))
+        self.assertEqual(cosmo.bias_mass(z=0.0, M=M).shape, (1, 2))
+        self.assertEqual(cosmo.bias_lgnbar_threshold(z=0.0, lgden=lgden).shape, (1, 2))
+        self.assertEqual(cosmo.xihm_mass(z=0.0, r=r, M=M).shape, (1, 2, 2))
+        self.assertEqual(cosmo.xihm_lgnbar_threshold(z=0.0, r=r, lgden=lgden).shape, (1, 2, 2))
+        self.assertEqual(cosmo.ximm_linear(z=0.0, r=r).shape, (1, 2))
 
 
 if __name__ == "__main__":

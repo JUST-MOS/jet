@@ -47,7 +47,9 @@ single sample returns shape ``(1, n_z)``.
 
 from __future__ import annotations
 
+import logging
 import warnings
+from contextlib import contextmanager
 from functools import lru_cache
 
 import numpy as np
@@ -60,12 +62,17 @@ from .cosmology import (
     _COMOVING_GRID_SIZE,
     _VEL_LIGHT_CM_S,
     Cosmology,
+    cosmo_parameter_spec,
 )
 from .emulator.emulator import Emulator
-from .emulator.pklin import sigma8_of_pk
+from .emulator.pklin import Z_GRID, sigma8_of_pk
 from .emulator.pklin import theta_spec as pklin_theta_spec
 
-__all__ = ["spectral_equivalence_de", "spectral_equivalence_as"]
+__all__ = [
+    "EquivalentCosmology",
+    "spectral_equivalence_de",
+    "spectral_equivalence_as",
+]
 
 #: Column order of the ``theta`` arrays accepted by this module.
 PARAMETER_NAMES = ("Omegab", "Omegam", "H0", "ns", "As", "w0", "wa", "mnu")
@@ -88,6 +95,38 @@ _T_CMB = 2.7255
 
 #: Effective number of relativistic species used by the reference.
 _NEFF = 3.046
+
+#: Logger for expected, deliberately silenced CAMB fallbacks.
+_LOGGER = logging.getLogger(__name__)
+
+#: Redshifts the bundled emulators are trained on.
+_DEFAULT_Z = np.asarray(Z_GRID, dtype=float)
+
+#: Warnings emitted when the internal sigma8 calculation falls back to CAMB.
+#: The high-level facade silences exactly these; other warnings still escape.
+_FALLBACK_WARNING = r"(Sigma8FromAs|spectral_equivalence_as).*using CAMB sigma8"
+
+#: Relative distance mismatch above which the facade reports a warning.
+_DISTANCE_ERROR_WARNING = 1e-6
+
+
+@contextmanager
+def _quiet_expected_fallbacks(enabled: bool):
+    """Silence the CAMB-fallback ``UserWarning`` emitted by the sigma8 helpers.
+
+    The high-level facade exists precisely to handle out-of-box ``w0/wa``:
+    using CAMB for the target sigma8 is an expected part of that flow, not
+    something the caller should have to filter. Unexpected warnings, including
+    solver ``RuntimeWarning``s, still propagate.
+    """
+    if not enabled:
+        yield
+        return
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=_FALLBACK_WARNING, category=UserWarning)
+        _LOGGER.debug("EquivalentCosmology: suppressing expected CAMB sigma8 fallback warnings")
+        yield
+
 
 #: Change in the relativistic species count per massive neutrino.
 _NEFF_PER_NCDM = 1.0132
@@ -879,3 +918,465 @@ def spectral_equivalence_as(
     with np.errstate(divide="ignore", invalid="ignore"):
         amplitude = np.power(sigma8_target / sigma8_aux, 2)
     return theta_values[:, 4, None] * amplitude
+
+
+class EquivalentCosmology:
+    r"""A single cosmology evaluated through its spectral-equivalent model.
+
+    This is the high-level entry point for the common case: an input cosmology
+    whose dark-energy parameters ``w0, wa`` lie outside the bundled emulators'
+    box. It converts :math:`\sigma_8` to :math:`A_s` when requested, constructs
+    the per-redshift auxiliary ``w0waCDM`` model with
+    :func:`spectral_equivalence_de` and :func:`spectral_equivalence_as`, and
+    evaluates the bundled halo statistics on that auxiliary model.
+
+    Parameters
+    ----------
+    theta : array-like of shape (8,) or (1, 8)
+        Cosmological parameters in :data:`PARAMETER_NAMES` order. One instance
+        represents one cosmology; for a batch, create one instance per row.
+    use_sigma8 : bool, optional
+        If true (the default), the fifth column is :math:`\sigma_8` at
+        ``z = 0`` and is converted to :math:`A_s` internally. If false, the
+        fifth column is already the physical :math:`A_s` (not ``As * 1e9``).
+    fallback_to_camb : bool, optional
+        Policy for the **internal** sigma8 calculation. The default ``True``
+        lets :class:`~jet.derived.Sigma8FromAs` and
+        :func:`spectral_equivalence_as` use CAMB when the target or auxiliary
+        model leaves the emulator box. This is what makes an out-of-box
+        ``w0/wa`` input usable. If false, those helpers raise
+        :class:`ValueError` instead. Downstream :meth:`number_density`,
+        :meth:`bias_mass` and :meth:`xihm_mass` are always strict: they never
+        fall back to CAMB.
+    sigma8_type : {"emulator", "class", "camb"}, optional
+        Backend passed to :func:`spectral_equivalence_as`. ``"emulator"``
+        (the default) uses the total-matter emulator with the per-side CAMB
+        fallback controlled by ``fallback_to_camb``. ``"class"`` and
+        ``"camb"`` use that Boltzmann code for both the target and the
+        auxiliary sigma8, so ``fallback_to_camb`` is ignored.
+    zstar : float, optional
+        Redshift of the last-scattering surface used by the distance match.
+    neutrino_matter_like : bool, optional
+        Treat massive neutrinos as matter in the distance integral; see
+        :meth:`jet.cosmology.Cosmology.comoving_distance`.
+
+    Notes
+    -----
+    The input may be out of the emulator box only in ``w0/wa``. The other five
+    parameters and the input amplitude must be inside the box; spectral
+    equivalence cannot repair them, so those cases raise :class:`ValueError`
+    immediately.
+
+    The auxiliary model is constructed at each requested redshift. Its
+    ``w0/wa`` are inside the box by construction, but its ``A_s`` can leave the
+    box when the requested amplitude is near the edge of what the emulator can
+    produce. :meth:`theta` still returns that auxiliary theta so it can be used
+    with ``HMFEmulator.load(fallback_to_camb=True)``; the direct statistics
+    methods raise a :class:`ValueError` in that case, because BHM and XiHM have
+    no fallback.
+
+    Expected CAMB-fallback ``UserWarning``s from the internal sigma8 helpers
+    are suppressed. Solver ``RuntimeWarning``s and the downstream emulators'
+    own warnings are not.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> cosmo = EquivalentCosmology(
+    ...     [0.055, 0.35140742, 63.6, 0.964, 0.781, -0.42, -1.75, 0.06]
+    ... )
+    >>> theta_eq = cosmo.theta_at(0.0)
+    >>> theta_eq.shape
+    (8,)
+    >>> n = cosmo.number_density(z=[0.0, 0.5, 1.0], M=np.array([1e13, 1e14]))
+    >>> n.shape
+    (3, 2)
+    """
+
+    def __init__(
+        self,
+        theta,
+        *,
+        use_sigma8: bool = True,
+        fallback_to_camb: bool = True,
+        sigma8_type: str = "emulator",
+        zstar: float = ZSTAR,
+        neutrino_matter_like: bool = False,
+    ) -> None:
+        values = np.asarray(theta, dtype=float)
+        if values.ndim == 2 and values.shape[0] == 1:
+            values = values[0]
+        if values.ndim != 1 or values.size != len(PARAMETER_NAMES):
+            raise ValueError(
+                "theta must have shape (8,) or (1, 8) in the order "
+                f"{', '.join(PARAMETER_NAMES)}; got {np.shape(theta)}"
+            )
+        if not np.all(np.isfinite(values)):
+            raise ValueError("theta must be finite")
+
+        self.use_sigma8 = bool(use_sigma8)
+        self.fallback_to_camb = bool(fallback_to_camb)
+        self.sigma8_type = _normalise_sigma8_type(sigma8_type)
+        self.zstar = float(zstar)
+        self.neutrino_matter_like = bool(neutrino_matter_like)
+
+        self._input = values.copy()
+        self._validate_non_de(self._input)
+        if self.use_sigma8 and self._input[4] <= 0.0:
+            raise ValueError(f"sigma8 must be positive, got {self._input[4]!r}")
+        self._theta_as = self._to_as(self._input)
+        self._validate_amplitude(self._theta_as)
+        self._needs_equivalence = not (
+            W0_BOUNDS[0] <= self._theta_as[5] <= W0_BOUNDS[1]
+            and WA_BOUNDS[0] <= self._theta_as[6] <= WA_BOUNDS[1]
+        )
+        self._aux_cache: dict[float, np.ndarray] = {}
+        self._hmf_emulator = None
+        self._bhm_emulator = None
+        self._xihm_emulator = None
+
+    # ------------------------------------------------------------------
+    # Input handling
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _validate_non_de(theta: np.ndarray) -> None:
+        """Reject parameters spectral equivalence cannot map back into the box."""
+        spec = cosmo_parameter_spec()
+        violations = [
+            (name, value)
+            for name, _row, value in spec.check_within_bounds(theta[None, :])
+            if name not in {"As", "w0", "wa"}
+        ]
+        if not violations:
+            return
+        details = []
+        for name, value in violations:
+            low, high = spec.params[spec.index(name)].bounds  # type: ignore[misc]
+            details.append(f"{name}={value:.6g} outside [{low:.6g}, {high:.6g}]")
+        raise ValueError(
+            "spectral equivalence can only map w0/wa and the amplitude; "
+            "these input parameters are outside the emulator box: " + ", ".join(details)
+        )
+
+    @staticmethod
+    def _validate_amplitude(theta: np.ndarray) -> None:
+        """Require the input (already As-based) amplitude to stay in the box."""
+        spec = cosmo_parameter_spec()
+        low, high = spec.params[spec.index("As")].bounds  # type: ignore[misc]
+        As = float(theta[4])
+        if not np.isfinite(As) or As <= 0.0:
+            raise ValueError(f"As must be finite and positive, got {As!r}")
+        if not low <= As <= high:
+            raise ValueError(
+                f"the input amplitude corresponds to As={As:.6g}, outside the "
+                f"emulator box [{low:.6g}, {high:.6g}]; spectral equivalence can "
+                "only remap w0/wa and cannot bring the amplitude into range"
+            )
+
+    def _to_as(self, theta: np.ndarray) -> np.ndarray:
+        """Return ``theta`` with the fifth column expressed as physical As."""
+        if not self.use_sigma8:
+            return theta.copy()
+
+        from .derived import Sigma8FromAs
+        from .spec import ParameterSpec
+
+        conversion = Sigma8FromAs(fallback_to_camb=self.fallback_to_camb)
+        spec = ParameterSpec(list(cosmo_parameter_spec()), derived=[conversion])
+        frame = spec.frame("sigma8")
+        try:
+            with _quiet_expected_fallbacks(self.fallback_to_camb):
+                return frame.to_base(theta[None, :])[0]
+        except ValueError as exc:
+            raise ValueError(
+                f"could not convert sigma8 to As: {exc}\n"
+                "Set fallback_to_camb=True to evaluate an out-of-box target "
+                "sigma8 with CAMB."
+            ) from None
+
+    # ------------------------------------------------------------------
+    # Per-redshift auxiliary model
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _z_values(z) -> np.ndarray:
+        """Return validated redshifts, defaulting to the emulator grid."""
+        if z is None:
+            return _DEFAULT_Z.copy()
+        values = np.atleast_1d(np.asarray(z, dtype=float))
+        if values.ndim != 1:
+            raise ValueError(f"z must be a scalar or one-dimensional, got shape {values.shape}")
+        if values.size == 0:
+            raise ValueError("z must contain at least one redshift")
+        if not np.all(np.isfinite(values)):
+            raise ValueError("z must be finite")
+        low, high = float(_DEFAULT_Z[0]), float(_DEFAULT_Z[-1])
+        if np.any(values < low) or np.any(values > high):
+            raise ValueError(
+                f"z must lie within the emulator grid [{low:g}, {high:g}], "
+                f"got [{values.min():g}, {values.max():g}]"
+            )
+        return values
+
+    def _compute_rows(self, z_values: np.ndarray) -> None:
+        """Compute and cache the auxiliary theta at every missing redshift."""
+        if not self._needs_equivalence:
+            for zz in z_values:
+                self._aux_cache[float(zz)] = self._theta_as.copy()
+            return
+
+        with _quiet_expected_fallbacks(self.fallback_to_camb):
+            w0, wa, err = spectral_equivalence_de(
+                self._theta_as,
+                z_values,
+                wcdm=False,
+                return_error=True,
+                zstar=self.zstar,
+                neutrino_matter_like=self.neutrino_matter_like,
+            )
+            As_eq = spectral_equivalence_as(
+                self._theta_as,
+                z_values,
+                w0,
+                wa,
+                sigma8_type=self.sigma8_type,
+                fallback_to_camb=self.fallback_to_camb,
+            )
+
+        for index, zz in enumerate(z_values):
+            row = self._theta_as.copy()
+            row[4] = float(As_eq[0, index])
+            row[5] = float(w0[0, index])
+            row[6] = float(wa[0, index])
+            if not np.all(np.isfinite(row)):
+                raise RuntimeError(
+                    f"spectral equivalence produced a non-finite auxiliary theta at z={zz:g}"
+                )
+            if row[4] <= 0.0:
+                raise RuntimeError(
+                    f"spectral equivalence produced a non-positive As_eq={row[4]!r} at z={zz:g}"
+                )
+            if not (W0_BOUNDS[0] <= row[5] <= W0_BOUNDS[1]) or not (
+                WA_BOUNDS[0] <= row[6] <= WA_BOUNDS[1]
+            ):
+                raise RuntimeError(
+                    "spectral equivalence produced auxiliary w0/wa outside the "
+                    f"emulator box at z={zz:g}: w0={row[5]:.6g}, wa={row[6]:.6g}"
+                )
+
+            error = float(err[0, index])
+            if not np.isfinite(error):
+                raise RuntimeError(
+                    f"spectral equivalence returned a non-finite distance error at z={zz:g}"
+                )
+            if error > _DISTANCE_ERROR_WARNING:
+                warnings.warn(
+                    f"spectral equivalence distance mismatch at z={zz:g}: "
+                    f"relative error {error:.3g}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+            self._aux_cache[float(zz)] = row
+
+    def _theta_rows(self, z_values: np.ndarray) -> np.ndarray:
+        """Return one auxiliary theta row per requested redshift."""
+        missing = [float(zz) for zz in np.unique(z_values) if float(zz) not in self._aux_cache]
+        if missing:
+            self._compute_rows(np.asarray(missing, dtype=float))
+        return np.stack([self._aux_cache[float(zz)] for zz in z_values], axis=0)
+
+    def _auxiliary_rows(self, z_values: np.ndarray, method: str) -> np.ndarray:
+        """Return auxiliary rows, refusing an out-of-box downstream call."""
+        rows = self._theta_rows(z_values)
+        spec = cosmo_parameter_spec()
+        violations = spec.check_within_bounds(rows)
+        if not violations:
+            return rows
+
+        details = []
+        for name, row, value in violations:
+            low, high = spec.params[spec.index(name)].bounds  # type: ignore[misc]
+            details.append(
+                f"z={z_values[row]:g}: {name}={value:.6g} outside [{low:.6g}, {high:.6g}]"
+            )
+        raise ValueError(
+            f"{method}: auxiliary theta is outside the emulator box:\n  "
+            + "\n  ".join(details)
+            + "\nUse .theta(z) to inspect it; HMF can be evaluated with "
+            "HMFEmulator.load(fallback_to_camb=True), while BHM and XiHM have "
+            "no CAMB fallback."
+        )
+
+    # ------------------------------------------------------------------
+    # Public theta accessors
+    # ------------------------------------------------------------------
+    @property
+    def input_theta(self) -> np.ndarray:
+        """The theta exactly as supplied, in its original amplitude base."""
+        return self._input.copy()
+
+    @property
+    def theta_as(self) -> np.ndarray:
+        """The input theta with the fifth column expressed as physical As."""
+        return self._theta_as.copy()
+
+    @property
+    def needs_equivalence(self) -> bool:
+        """Whether the input ``w0/wa`` lie outside the emulator box."""
+        return self._needs_equivalence
+
+    def theta(self, z=None) -> np.ndarray:
+        """Return the auxiliary theta at each redshift, shape ``(n_z, 8)``.
+
+        The fifth column is physical ``As``. The auxiliary ``w0/wa`` are inside
+        the box; ``As`` may be outside it when the target amplitude is near the
+        edge of what the emulator can produce.
+        """
+        return self._theta_rows(self._z_values(z))
+
+    def theta_at(self, z: float) -> np.ndarray:
+        """Return the auxiliary theta at one redshift, shape ``(8,)``."""
+        z_values = self._z_values(z)
+        if z_values.size != 1:
+            raise ValueError(f"theta_at expects a scalar z, got {z_values.size} values")
+        return self._theta_rows(z_values)[0]
+
+    # ------------------------------------------------------------------
+    # Lazy emulators
+    # ------------------------------------------------------------------
+    def _get_hmf(self):
+        if self._hmf_emulator is None:
+            from .emulator.hmf import HMFEmulator
+
+            self._hmf_emulator = HMFEmulator.load()
+        return self._hmf_emulator
+
+    def _get_bhm(self):
+        if self._bhm_emulator is None:
+            from .emulator.bhm import BhmEmulator
+
+            self._bhm_emulator = BhmEmulator.load()
+        return self._bhm_emulator
+
+    def _get_xihm(self):
+        if self._xihm_emulator is None:
+            from .emulator.xihm import XiHMEmulator
+
+            self._xihm_emulator = XiHMEmulator.load()
+        return self._xihm_emulator
+
+    # ------------------------------------------------------------------
+    # Direct statistics
+    # ------------------------------------------------------------------
+    def number_density(self, z=None, M=None) -> np.ndarray:
+        r"""Cumulative halo number density, shape ``(n_z, n_M)``.
+
+        Units are :math:`(h/\mathrm{Mpc})^3`. ``M`` defaults to the emulator's
+        fine mass grid. The auxiliary theta is required to be entirely inside
+        the emulator box.
+        """
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "number_density")
+        hmf = self._get_hmf()
+        parts = [
+            hmf.number_density(row[None, :], z=[float(zz)], M=M)[0, 0]
+            for row, zz in zip(rows, z_values, strict=True)
+        ]
+        return np.stack(parts, axis=0)
+
+    def dndlnM(self, z=None, M=None) -> np.ndarray:
+        r"""Differential halo mass function, shape ``(n_z, n_M)``.
+
+        Units are :math:`(h/\mathrm{Mpc})^3` per :math:`d\ln M`.
+        """
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "dndlnM")
+        hmf = self._get_hmf()
+        parts = [
+            hmf.dndlnM(row[None, :], z=[float(zz)], M=M)[0, 0]
+            for row, zz in zip(rows, z_values, strict=True)
+        ]
+        return np.stack(parts, axis=0)
+
+    def bias_mass(self, z=None, M=None) -> np.ndarray:
+        """Halo bias at a fixed mass threshold, shape ``(n_z, n_M)``."""
+        if M is None:
+            raise ValueError("bias_mass requires a mass threshold M")
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "bias_mass")
+        bhm = self._get_bhm()
+        parts = [
+            bhm.bias_mass(row[None, :], z=[float(zz)], M=M)[0, 0]
+            for row, zz in zip(rows, z_values, strict=True)
+        ]
+        return np.stack(parts, axis=0)
+
+    def bias_lgnbar_threshold(self, z=None, lgden=None) -> np.ndarray:
+        """Halo bias at a fixed density threshold, shape ``(n_z, n_lgden)``."""
+        if lgden is None:
+            raise ValueError("bias_lgnbar_threshold requires lgden")
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "bias_lgnbar_threshold")
+        bhm = self._get_bhm()
+        parts = [
+            bhm.bias_lgnbar_threshold(row[None, :], z=[float(zz)], lgden=lgden)[0, 0]
+            for row, zz in zip(rows, z_values, strict=True)
+        ]
+        return np.stack(parts, axis=0)
+
+    def xihm_mass(self, z=None, r=None, M=None) -> np.ndarray:
+        """Halo-matter correlation at a mass threshold, shape ``(n_z, n_M, n_r)``."""
+        if r is None:
+            raise ValueError("xihm_mass requires separations r")
+        if M is None:
+            raise ValueError("xihm_mass requires a mass threshold M")
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "xihm_mass")
+        xihm = self._get_xihm()
+        parts = []
+        for row, zz in zip(rows, z_values, strict=True):
+            value = xihm.xihm_mass(row[None, :], z=[float(zz)], r=r, M=M)
+            # Native shape is (sample, n_M, n_z, n_r); keep z first.
+            parts.append(value[0, :, 0, :])
+        return np.stack(parts, axis=0)
+
+    def xihm_lgnbar_threshold(self, z=None, r=None, lgden=None) -> np.ndarray:
+        """Halo-matter correlation at a density threshold, ``(n_z, n_lgden, n_r)``."""
+        if r is None:
+            raise ValueError("xihm_lgnbar_threshold requires separations r")
+        if lgden is None:
+            raise ValueError("xihm_lgnbar_threshold requires lgden")
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "xihm_lgnbar_threshold")
+        xihm = self._get_xihm()
+        parts = []
+        for row, zz in zip(rows, z_values, strict=True):
+            value = xihm.xihm_lgnbar_threshold(row[None, :], z=[float(zz)], r=r, lgden=lgden)
+            # Native shape is (sample, n_lgden, n_z, n_r); keep z first.
+            parts.append(value[0, :, 0, :])
+        return np.stack(parts, axis=0)
+
+    def ximm_linear(self, z=None, r=None) -> np.ndarray:
+        r"""Linear CDM+baryon correlation function, shape ``(n_z, n_r)``.
+
+        This uses the same :math:`P_{cb}` definition as
+        :func:`jet.emulator.xihm.ximm_linear`; it is not the total-matter
+        correlation function including massive neutrinos. The auxiliary theta
+        is evaluated at each redshift.
+        """
+        if r is None:
+            raise ValueError("ximm_linear requires separations r")
+        z_values = self._z_values(z)
+        rows = self._auxiliary_rows(z_values, "ximm_linear")
+        xihm = self._get_xihm()
+        parts = [
+            xihm.ximm_linear(row[None, :], z=[float(zz)], r=r)[0, 0]
+            for row, zz in zip(rows, z_values, strict=True)
+        ]
+        return np.stack(parts, axis=0)
+
+    def __repr__(self) -> str:
+        return (
+            f"EquivalentCosmology(use_sigma8={self.use_sigma8}, "
+            f"w0={self._theta_as[5]:.6g}, wa={self._theta_as[6]:.6g}, "
+            f"needs_equivalence={self._needs_equivalence})"
+        )

@@ -165,6 +165,42 @@ theta = frame.from_base(theta_as)  # back to 0.81
 inversion uses the total-matter spectrum composed in `jet.emulator.pkmm`; the
 halo mass function itself still consumes `P_cb`.
 
+### Spectral equivalence method for DESI w0-wa range:
+
+`EquivalentCosmology` handles a cosmology whose `w0/wa` lie outside the
+emulator box by constructing an in-box auxiliary model at each redshift. The
+fifth column is sigma8 at `z = 0` when `use_sigma8=True`; the facade converts
+it to `As` and evaluates the requested statistic on the auxiliary theta.
+
+```python
+import numpy as np
+from jet.equivalence import EquivalentCosmology
+
+# The fifth column is sigma8 at z=0 when use_sigma8=True. The facade converts
+# it to As, finds the per-redshift auxiliary w0/wa, and assembles the theta.
+theta_sigma8 = np.array([0.055, 0.35140742, 63.6, 0.964, 0.781, -0.42, -1.75, 0.06])
+z_facade = np.array([0.0, 0.5, 1.0])
+mass = np.array([1e13, 1e14])
+
+cosmo = EquivalentCosmology(theta_sigma8, use_sigma8=True)
+theta_eq = cosmo.theta(z_facade)
+print("auxiliary theta (As base):")
+for zz, row in zip(z_facade, theta_eq):
+    print(f"  z = {zz:4.2f}   w0 = {row[5]: .8f}   wa = {row[6]: .8f}   As = {row[4]:.6e}")
+
+# The facade's direct statistics silently use CAMB for the target sigma8; the
+# expected fallback warnings are suppressed. The auxiliary model stays in box.
+number_density = cosmo.number_density(z=z_facade, M=mass)
+print("n(>=M) shape:", number_density.shape)
+dndlnM = cosmo.dndlnM(z=z_facade, M=mass)
+```
+
+#### Use `print(dir(cosmo))` to list the methods available on the facade
+
+```python
+print(dir(cosmo))
+```
+
 ### Halo mass function with baryonic feedback
 
 `BCMHFEmulator` predicts the cumulative abundance with the baryon correction
@@ -221,7 +257,7 @@ xihm = emu.xihm_mass(theta, z=z, r=r, M=[1e13, 1e14])  # (n, 2, 3, 12)
 # The three pieces, if you want them separately
 box = emu.bias_ratio(theta)  # the raw emulated quantity, (n, 2664)
 b = emu.brhm(theta, z=z, lgden=[-5.0], r=r)  # the bias ratio on your own axes
-xi_mm = emu.ximm(theta, z=z, r=r)  # linear matter correlation function
+xi_cb = emu.ximm_linear(theta, z=z, r=r)  # linear CDM+baryon correlation (P_cb)
 bias = emu.bias_lgnbar_threshold(theta, z=z, lgden=[-5.0, -4.0])  # the halo bias
 ```
 
@@ -233,11 +269,13 @@ value is a *lower* mass threshold and a weaker bias; `r` is in `h^-1 Mpc` and
 Four things are worth knowing before using it:
 
 - **The emulated quantity is a ratio, not the correlation function.** The
-  Gaussian process predicts `B_hm = xi_hm / xi_mm`; `XiHMEmulator` multiplies
-  back in a matter correlation function it computes by Hankel-transforming the
-  bundled linear `P(k)` (`jet.fourier`). At large separations it blends onto a
-  linear-bias baseline, `b * P_lin` transformed — so this is where the halo
-  *bias* gets used, and `jet.emulator.bhm` is what supplies it.
+  Gaussian process predicts `B_hm = xi_hm / xi_cb`; `XiHMEmulator` multiplies
+  back in the linear **CDM+baryon** correlation function `ximm_linear`, which
+  it computes by Hankel-transforming the bundled `P_cb(k)` (`jet.fourier`).
+  This is not the total-matter correlation including massive neutrinos. At
+  large separations it blends onto a linear-bias baseline, `b * P_lin`
+  transformed — so this is where the halo *bias* gets used, and
+  `jet.emulator.bhm` is what supplies it.
 - **`z`, `lgden` and `r` are interpolation axes, not emulator axes.** The
   Gaussian process sees the eight cosmological parameters only; the other three
   are handled afterwards by linear interpolation of the box, linear in
@@ -335,8 +373,49 @@ row or a batch of rows and always keep the sample axis, returning `(1, n_z)` or
 
 The emulator/CAMB comparison assumes the reference's `Nncdm = 1` massive
 neutrino convention (one massive species for `mnu > 0`, massless otherwise).
-See [`examples/spectral_equivalence_example.py`](examples/spectral_equivalence_example.py)
-for a runnable walkthrough.
+
+For the common case, use the high-level
+[`EquivalentCosmology`](jet/equivalence.py) facade instead of calling the two
+functions by hand. It accepts one theta, converts sigma8 to `As` when requested,
+constructs the per-redshift auxiliary model, and evaluates HMF/BHM/XiHM:
+
+```python
+import numpy as np
+from jet.equivalence import EquivalentCosmology
+
+# Fifth column is sigma8 at z=0 when use_sigma8=True.
+theta = np.array([0.055, 0.35140742, 63.6, 0.964, 0.781, -0.42, -1.75, 0.06])
+cosmo = EquivalentCosmology(theta, use_sigma8=True)
+
+theta_eq = cosmo.theta(z=[0.0, 0.5, 1.0])  # (3, 8), fifth column is As
+theta_0 = cosmo.theta_at(0.0)  # (8,)
+n = cosmo.number_density(z=[0.0, 0.5, 1.0], M=np.array([1e13, 1e14]))  # (3, 2)
+b = cosmo.bias_mass(z=[0.0, 0.5, 1.0], M=np.array([1e13, 1e14]))  # (3, 2)
+xi = cosmo.xihm_mass(z=0.0, r=np.array([1.0, 10.0]), M=np.array([1e13]))  # (1, 1, 2)
+```
+
+Only `w0/wa` may be outside the emulator box. The other five parameters and the
+input amplitude must be inside it; spectral equivalence cannot repair those, so
+they raise immediately. The auxiliary `w0/wa` stay in box by construction, but
+`As_eq` may leave it near the amplitude edges. In that case `.theta(z)` still
+returns the auxiliary theta; the direct statistics methods raise, because BHM
+and XiHM have no fallback. HMF can be evaluated explicitly with its own CAMB
+fallback:
+
+```python
+from jet.emulator.hmf import HMFEmulator
+
+theta_eq = cosmo.theta_at(0.0)  # As_eq may be outside the box
+hmf = HMFEmulator.load(fallback_to_camb=True)
+n = hmf.number_density(theta_eq, z=0.0, M=np.array([1e13]))
+```
+
+Expected CAMB-fallback warnings from the internal sigma8 calculation are
+suppressed by the facade; solver warnings and downstream emulator warnings are
+not. The low-level `spectral_equivalence_*` functions keep their original
+warning behaviour. See
+[`examples/spectral_equivalence_example.py`](examples/spectral_equivalence_example.py)
+for both the in-box and the `As_eq`-out-of-box walkthroughs.
 
 ## Repository layout
 
@@ -346,7 +425,7 @@ jet/
 │   ├── spec.py             # ParameterSpec / DataVectorSpec, shared by all stages
 │   ├── derived.py          # derived parameters: sigma8 <- As, h <- H0
 │   ├── cosmology.py        # background expansion the ported physics needs
-│   ├── equivalence.py      # spectral equivalence: distance and sigma8 matching
+│   ├── equivalence.py      # spectral equivalence and the EquivalentCosmology facade
 │   ├── fourier.py          # FFTLog Hankel transforms (P(k) <-> xi(r))
 │   ├── emulator/           # transforms, backends, bundle format, metrics
 │   │   ├── pklin.py        # reader for the bundled linear-theory P(k) emulator
@@ -368,7 +447,7 @@ jet/
 │   ├── hmf.ipynb           #   halo mass function quick start
 │   ├── hmf_bcm_example.py  #   baryonic mass function quick start
 │   ├── xihm_example.py     #   halo-matter bias ratio quick start
-│   └── equivalence_example.py  # distance and sigma8 matching quick start
+│   └── spectral_equivalence_example.py  # low-level and facade quick start
 ├── environment.yml         # shared development environment (conda + pip)
 ├── VERSION                 # single source of truth for the version (bump2version-owned)
 ├── .bumpversion.cfg        # version bump configuration
